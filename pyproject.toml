@@ -1,0 +1,89 @@
+# this_file: pyproject.toml
+
+[project]
+name = "fontlab-www-toolkit"
+description = "Shared ProperDocs + MaterialX site builder and deploy helpers for FontLab web properties."
+readme = "README.md"
+requires-python = ">=3.12"
+keywords = ["fontlab", "mkdocs", "materialx", "properdocs", "webflow", "static-site"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Documentation",
+  "Topic :: Software Development :: Build Tools",
+]
+dependencies = [
+  "fire>=0.7.0",
+  "markdownify>=1.2.2",
+  "mkdocs>=1.6.1",
+  "mkdocs-materialx>=10.1.4",
+  "properdocs>=1.6.7",
+]
+dynamic = ["version"]
+
+[project.license]
+text = "MIT"
+
+[[project.authors]]
+name = "Fontlab Ltd."
+email = "support@fontlab.com"
+
+[project.urls]
+Homepage = "https://github.com/Fontlab/fontlab-www-toolkit"
+Issues   = "https://github.com/Fontlab/fontlab-www-toolkit/issues"
+Source   = "https://github.com/Fontlab/fontlab-www-toolkit"
+
+[project.scripts]
+fontlab-www-toolkit = "fontlab_www_toolkit.__main__:main"
+# Backwards-compatible alias used by per-site build wrappers.
+fontlab-build       = "fontlab_www_toolkit.__main__:main"
+
+[build-system]
+requires = ["hatch-vcs>=0.4.0", "hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+fallback-version = "0.0.0.dev0"
+
+[tool.hatch.version.raw-options]
+local_scheme = "no-local-version"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/fontlab_www_toolkit/__version__.py"
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "src/fontlab_www_toolkit",
+  "tests",
+  "README.md",
+  "LICENSE",
+  "pyproject.toml",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fontlab_www_toolkit"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+ignore = ["E501"]
+
+[dependency-groups]
+dev = [
+  "pytest>=9.0.3",
+]
