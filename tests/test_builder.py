@@ -574,3 +574,47 @@ def test_cloudinary_accessibility_options() -> None:
     assert "/custom-acc-effect/vw/photo.jpg" in processed
     assert "e_blur:2000,f_auto,q_auto:low/custom-acc-effect/vw/photo.jpg" in processed
 
+
+def test_cloudinary_excludes_non_media_assets() -> None:
+    html = """
+    <html>
+      <head>
+        <link rel="stylesheet" href="https://cdn.prod.website-files.com/67c7070e70765599c7796390/css/vexy.webflow.css" />
+        <script src="https://cdn.prod.website-files.com/67c7070e70765599c7796390/js/webflow.js"></script>
+        <link rel="manifest" href="https://cdn.prod.website-files.com/67c7070e70765599c7796390/manifest.json" />
+        <style>
+          @font-face {
+            font-family: 'Test';
+            src: url('https://cdn.prod.website-files.com/67c7070e70765599c7796390/fonts/test.woff2') format('woff2');
+          }
+          .bg {
+            background-image: url('https://cdn.prod.website-files.com/67c7070e70765599c7796390/images/bg.png');
+          }
+        </style>
+      </head>
+      <body>
+        <img src="https://cdn.prod.website-files.com/67c7070e70765599c7796390/images/photo.jpg" />
+      </body>
+    </html>
+    """
+    conf = {
+        "cl_cloud": "testcloud",
+        "cl_map": {
+            "https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"
+        },
+        "cl_trans": "c_limit,w_auto/f_auto,q_auto/"
+    }
+    builder = SiteBuilder(BuildPaths(Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path(".")))
+    processed = builder.process_html_cloudinary(html, conf)
+    
+    # CSS link, JS script, and font woff2 urls must remain untouched
+    assert 'href="https://cdn.prod.website-files.com/67c7070e70765599c7796390/css/vexy.webflow.css"' in processed
+    assert 'src="https://cdn.prod.website-files.com/67c7070e70765599c7796390/js/webflow.js"' in processed
+    assert 'href="https://cdn.prod.website-files.com/67c7070e70765599c7796390/manifest.json"' in processed
+    assert "url('https://cdn.prod.website-files.com/67c7070e70765599c7796390/fonts/test.woff2')" in processed
+
+    # Images must be replaced
+    assert "url('https://res.cloudinary.com/testcloud/image/upload/c_limit,w_auto/f_auto,q_auto/vw/images/bg.png')" in processed
+    assert 'src="https://res.cloudinary.com/testcloud/image/upload/c_limit,w_auto/f_auto,q_auto/vw/images/photo.jpg"' in processed
+
+

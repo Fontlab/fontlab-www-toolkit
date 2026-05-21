@@ -616,9 +616,21 @@ def clean_webflow_html(html: str) -> str:
     return inject_badge_hiding_css(strip_webflow_badge(html))
 
 
+def is_image_or_allowed_media(url: str) -> bool:
+    # Strip query parameters and fragment identifier
+    path = url.split("?")[0].split("#")[0].lower()
+    excluded_extensions = {
+        ".css", ".js", ".json", ".woff", ".woff2", ".ttf", ".otf", ".eot",
+        ".html", ".htm", ".webmanifest", ".map"
+    }
+    return not any(path.endswith(ext) for ext in excluded_extensions)
+
+
 def map_cloudinary_url(url: str, cl_cloud: str, cl_map: dict[str, str], cl_trans: str) -> str:
     for prefix, map_val in cl_map.items():
         if url.startswith(prefix):
+            if not is_image_or_allowed_media(url):
+                return url
             rest = url[len(prefix):].lstrip("/")
             trans = cl_trans
             if trans and not trans.endswith("/"):
@@ -633,6 +645,8 @@ def replace_urls_in_text(text: str, prefix: str, map_val: str, cl_cloud: str, cl
     
     def replacer(match):
         url = match.group(0)
+        if not is_image_or_allowed_media(url):
+            return url
         rest = url[len(prefix):].lstrip("/")
         trans = cl_trans
         if trans and not trans.endswith("/"):
