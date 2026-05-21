@@ -119,7 +119,7 @@ class SiteBuilder:
     def pull_webflow(self) -> list[Path]:
         written: list[Path] = []
         for page in self.discover_webflow_pages():
-            html = fetch_text(page.import_url)
+            html = clean_webflow_html(fetch_text(page.import_url))
             page.cache_path.parent.mkdir(parents=True, exist_ok=True)
             page.cache_path.write_text(html, encoding="utf-8")
             written.append(page.cache_path)
@@ -232,6 +232,40 @@ def fetch_text(url: str) -> str:
     with urllib.request.urlopen(request, timeout=30) as response:
         charset = response.headers.get_content_charset() or "utf-8"
         return response.read().decode(charset, errors="replace")
+
+
+# The "Made in Webflow" attribution badge Webflow injects into exported pages.
+# We are legally entitled to remove it on paid plans; do so in two ways so it is
+# gone both at processing time and as a defensive runtime fallback.
+WEBFLOW_BADGE_ANCHOR_RE = re.compile(
+    r"<a\b[^>]*\bclass=\"[^\"]*\bw-webflow-badge\b[^\"]*\"[^>]*>.*?</a>",
+    re.IGNORECASE | re.DOTALL,
+)
+WEBFLOW_BADGE_HIDE_CSS = "<style>.w-webflow-badge{display:none !important;}</style>"
+
+
+def strip_webflow_badge(html: str) -> str:
+    """Remove the ``a.w-webflow-badge`` element from the DOM (approach 2)."""
+    return WEBFLOW_BADGE_ANCHOR_RE.sub("", html)
+
+
+def inject_badge_hiding_css(html: str) -> str:
+    """Add CSS that hides ``.w-webflow-badge`` (approach 1).
+
+    Injected once before ``</head>`` (or prepended when there is no head) so the
+    badge stays hidden even if a future export nests it somewhere we don't strip.
+    """
+    if WEBFLOW_BADGE_HIDE_CSS in html:
+        return html
+    match = re.search(r"</head>", html, re.IGNORECASE)
+    if match:
+        return html[: match.start()] + WEBFLOW_BADGE_HIDE_CSS + html[match.start() :]
+    return WEBFLOW_BADGE_HIDE_CSS + html
+
+
+def clean_webflow_html(html: str) -> str:
+    """Apply both badge-removal approaches to a fetched Webflow page."""
+    return inject_badge_hiding_css(strip_webflow_badge(html))
 
 
 def convert_old_html(source: Path, title: str) -> str:

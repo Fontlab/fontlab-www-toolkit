@@ -9,15 +9,26 @@ from pathlib import Path
 from fontlab_www_toolkit.builder import (
     BuildPaths,
     SiteBuilder,
+    clean_webflow_html,
     convert_old_html,
     extract_old_page_content,
     find_uv,
+    inject_badge_hiding_css,
     markdown_to_public_path,
     overlay_directory,
     parse_flat_yaml,
     parse_frontmatter,
     remove_html_blocks,
     replace_directory,
+    strip_webflow_badge,
+)
+
+BADGE_HTML = (
+    '<a class="w-webflow-badge" href="https://webflow.com?utm_campaign=brandjs">'
+    '<img src="https://d3e54v103j8qbb.cloudfront.net/img/webflow-badge-icon-d2.89e12c322e.svg" '
+    'alt="" style="margin-right: 4px; width: 26px;">'
+    '<img src="https://d3e54v103j8qbb.cloudfront.net/img/webflow-badge-text-d2.c82cec3b78.svg" '
+    'alt="Made in Webflow"></a>'
 )
 
 
@@ -116,3 +127,31 @@ def test_convert_old_html_when_real_page_then_returns_markdown(tmp_path: Path) -
 
 def test_find_uv_when_called_then_returns_string() -> None:
     assert isinstance(find_uv(), str)
+
+
+def test_strip_webflow_badge_when_badge_present_then_removes_anchor() -> None:
+    html = f"<body><p>keep</p>{BADGE_HTML}</body>"
+    cleaned = strip_webflow_badge(html)
+    assert "w-webflow-badge" not in cleaned
+    assert "<p>keep</p>" in cleaned
+
+
+def test_inject_badge_hiding_css_when_head_present_then_inserts_once() -> None:
+    html = "<html><head><title>x</title></head><body></body></html>"
+    once = inject_badge_hiding_css(html)
+    assert ".w-webflow-badge{display:none !important;}" in once
+    assert once.lower().index("<style>") < once.lower().index("</head>")
+    # Idempotent: a second pass must not duplicate the rule.
+    assert inject_badge_hiding_css(once) == once
+
+
+def test_inject_badge_hiding_css_when_no_head_then_prepends() -> None:
+    html = "<div>only body</div>"
+    assert inject_badge_hiding_css(html).startswith("<style>")
+
+
+def test_clean_webflow_html_applies_both_approaches() -> None:
+    html = f"<html><head></head><body>{BADGE_HTML}</body></html>"
+    cleaned = clean_webflow_html(html)
+    assert "w-webflow-badge" not in cleaned.replace(".w-webflow-badge{display:none !important;}", "")
+    assert ".w-webflow-badge{display:none !important;}" in cleaned
