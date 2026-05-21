@@ -22,32 +22,48 @@ from fontlab_www_toolkit.builder import BuildPaths, SiteBuilder, setup_environme
 class Cli:
     """Build, pull-webflow, convert-old, clean, or setup a FontLab site repo."""
 
-    def build(self, root: str | None = None, skip_webflow: bool = False) -> None:
+    def build(self, root: str | None = None, skip_webflow: bool = False, config: str | None = None) -> None:
         """Full build: pull Webflow (unless skipped), build, overlay, publish.
 
         Args:
             root: site repo root; defaults to the current working directory.
             skip_webflow: if true, do not refresh ``wf_cache/`` before building.
+            config: path to the JSON configuration file.
         """
-        builder, paths = _builder(root)
+        builder, paths = _builder(root, config=config)
         builder.build(pull_webflow=not skip_webflow)
         print(f"Published {paths.public}")
 
-    def pull_webflow(self, root: str | None = None) -> None:
-        """Refresh ``wf_cache/`` only."""
-        builder, paths = _builder(root)
+    def pull_webflow(self, root: str | None = None, config: str | None = None) -> None:
+        """Refresh ``wf_cache/`` only.
+
+        Args:
+            root: site repo root; defaults to the current working directory.
+            config: path to the JSON configuration file.
+        """
+        builder, paths = _builder(root, config=config)
         for path in builder.pull_webflow():
             print(path.relative_to(paths.root))
 
-    def convert_old(self, root: str | None = None) -> None:
-        """Regenerate OLD pages from ``src_docs/old-pages.yml``."""
-        builder, paths = _builder(root)
+    def convert_old(self, root: str | None = None, config: str | None = None) -> None:
+        """Regenerate OLD pages from ``src_docs/old-pages.yml``.
+
+        Args:
+            root: site repo root; defaults to the current working directory.
+            config: path to the JSON configuration file.
+        """
+        builder, paths = _builder(root, config=config)
         for path in builder.convert_old_pages():
             print(path.relative_to(paths.root))
 
-    def clean(self, root: str | None = None) -> None:
-        """Delete ``build_docs/`` and ``public/``."""
-        builder, _ = _builder(root)
+    def clean(self, root: str | None = None, config: str | None = None) -> None:
+        """Delete ``build_docs/`` and ``public/``.
+
+        Args:
+            root: site repo root; defaults to the current working directory.
+            config: path to the JSON configuration file.
+        """
+        builder, _ = _builder(root, config=config)
         builder.clean()
 
     def setup(
@@ -66,9 +82,9 @@ class Cli:
         print(__version__)
 
 
-def _builder(root: str | None) -> tuple[SiteBuilder, BuildPaths]:
+def _builder(root: str | None, config: str | None = None) -> tuple[SiteBuilder, BuildPaths]:
     paths = BuildPaths.from_root(Path(root) if root else Path.cwd())
-    return SiteBuilder(paths), paths
+    return SiteBuilder(paths, config_path=config), paths
 
 
 def main(argv: list[str] | None = None) -> int:

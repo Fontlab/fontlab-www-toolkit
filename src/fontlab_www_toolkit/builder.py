@@ -17,8 +17,10 @@ subset) and may declare:
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -27,6 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
 
+from bs4 import BeautifulSoup
 from markdownify import ATX, markdownify
 
 
@@ -81,11 +84,26 @@ class SiteBuilder:
 
     frontmatter_key: ClassVar[str] = "webflow-import-url"
 
-    def __init__(self, paths: BuildPaths) -> None:
+    def __init__(self, paths: BuildPaths, config_path: str | Path | None = None) -> None:
         self.paths = paths
+        self.config = {}
+        if config_path:
+            config_p = Path(config_path)
+            if not config_p.exists():
+                raise FileNotFoundError(f"Configuration file not found: {config_p}")
+            self.config = json.loads(config_p.read_text(encoding="utf-8"))
+        else:
+            default_config = self.paths.root / "fontlab-www-toolkit.json"
+            if default_config.exists():
+                self.config = json.loads(default_config.read_text(encoding="utf-8"))
 
     def load_old_pages(self) -> OldPageMapping | None:
-        config = self.paths.old_pages_config
+        config_path_str = self.config.get("old_pages_config")
+        if config_path_str:
+            config = (self.paths.root / config_path_str).resolve()
+        else:
+            config = self.paths.old_pages_config
+            
         if not config.exists():
             return None
         data = parse_flat_yaml(config.read_text(encoding="utf-8"))
@@ -100,9 +118,10 @@ class SiteBuilder:
         pages: list[WebflowPage] = []
         if not self.paths.markdown.exists():
             return pages
+        frontmatter_key = self.config.get("frontmatter_key", self.frontmatter_key)
         for markdown_path in sorted(self.paths.markdown.rglob("*.md")):
             meta = parse_frontmatter(markdown_path.read_text(encoding="utf-8"))
-            import_url = meta.get(self.frontmatter_key)
+            import_url = meta.get(frontmatter_key)
             if not import_url:
                 continue
             public_path = markdown_to_public_path(markdown_path, self.paths.markdown)
@@ -116,10 +135,329 @@ class SiteBuilder:
             )
         return pages
 
+    def process_page_html(self, html: str) -> str:
+        # 1. Parse inline config from HTML if present
+        page_config = {}
+        try:
+            soup_temp = BeautifulSoup(html, "html.parser")
+            script = soup_temp.find("script", id="fontlab-toolkit-config", type="application/json")
+            if script and script.string:
+                page_config = json.loads(script.string.strip())
+        except Exception:
+            pass
+
+        # 2. Merge configs: page_config overrides self.config
+        effective_config = {}
+        effective_config.update(self.config)
+        if "cloudinary" in self.config and "cloudinary" in page_config:
+            merged_cloudinary = {}
+            merged_cloudinary.update(self.config["cloudinary"])
+            merged_cloudinary.update(page_config["cloudinary"])
+            effective_config["cloudinary"] = merged_cloudinary
+        elif "cloudinary" in page_config:
+            effective_config["cloudinary"] = page_config["cloudinary"]
+        
+        for k, v in page_config.items():
+            if k != "cloudinary":
+                effective_config[k] = v
+
+        # 3. Clean Webflow HTML badge and inject hiding CSS
+        hide_css = effective_config.get("webflow_badge_hide_css", WEBFLOW_BADGE_HIDE_CSS)
+        html = inject_badge_hiding_css(strip_webflow_badge(html), hide_css=hide_css)
+
+        # 4. Cloudinary replacements & responsive images
+        cloudinary_conf = effective_config.get("cloudinary")
+        if cloudinary_conf:
+            html = self.process_html_cloudinary(html, cloudinary_conf)
+            
+        return html
+
+    def process_html_cloudinary(self, html: str, cloudinary_conf: dict) -> str:
+        cl_cloud = cloudinary_conf.get("cl_cloud", "fontlab")
+        cl_map = cloudinary_conf.get("cl_map", {})
+        if not cl_map:
+            return html
+            
+        cl_trans = cloudinary_conf.get("cl_trans", "c_limit,w_auto/f_auto,q_auto,dpr_auto/")
+        
+        cl_responsive = cloudinary_conf.get("cl_responsive")
+        cl_responsive_enabled = bool(cl_responsive)
+        if cl_responsive_enabled and not isinstance(cl_responsive, dict):
+            cl_responsive = {}
+            
+        if cl_responsive_enabled:
+            cl_trans_thumb = cl_responsive.get("cl_trans_thumb", "c_limit,w_128/f_auto,q_1/")
+            methodology = cl_responsive.get("methodology", "modern")
+        else:
+            cl_trans_thumb = ""
+            methodology = ""
+
+        # Extract lazyload, placeholder, and accessibility settings
+        lazyload = cl_responsive.get("lazyload") if cl_responsive_enabled else cloudinary_conf.get("lazyload")
+        placeholder = cl_responsive.get("placeholder") if cl_responsive_enabled else cloudinary_conf.get("placeholder")
+        accessibility = cl_responsive.get("accessibility") if cl_responsive_enabled else cloudinary_conf.get("accessibility")
+
+        # Determine effective lazyload setting
+        effective_lazyload = "false"
+        if lazyload is True:
+            effective_lazyload = "observer" if methodology == "modern" else "native"
+        elif isinstance(lazyload, str):
+            effective_lazyload = lazyload.lower()
+
+        # Determine effective placeholder setting
+        placeholder_mapping = {
+            "blur": "e_blur:2000,f_auto,q_auto:low",
+            "pixelate": "e_pixelate:100,f_auto,q_auto:low",
+            "vectorize": "e_vectorize,f_auto,q_auto:low",
+            "predominant": "c_fill,w_1,h_1/f_auto,q_auto:low",
+            "predominant-color": "c_fill,w_1,h_1/f_auto,q_auto:low",
+        }
+        
+        placeholder_trans = ""
+        use_blank_placeholder = False
+        
+        if placeholder is False:
+            use_blank_placeholder = True
+        elif isinstance(placeholder, str):
+            placeholder_trans = placeholder_mapping.get(placeholder.lower(), placeholder)
+        else:
+            placeholder_trans = cl_trans_thumb if cl_trans_thumb else "c_limit,w_128/f_auto,q_1/"
+
+        # Determine effective accessibility setting
+        accessibility_mapping = {
+            "colorblind": "e_assist_colorblind",
+            "monochrome": "e_grayscale",
+            "darkmode": "e_brightness_hsb:-30",
+            "brightmode": "e_brightness_hsb:30",
+        }
+        accessibility_trans = ""
+        if isinstance(accessibility, str):
+            accessibility_trans = accessibility_mapping.get(accessibility.lower(), accessibility)
+
+        # Prepare accessibility suffix
+        acc_suffix = ""
+        if accessibility_trans:
+            acc_suffix = accessibility_trans
+            if not acc_suffix.endswith("/"):
+                acc_suffix += "/"
+
+        # Construct effective transformations
+        effective_cl_trans = cl_trans
+        if acc_suffix:
+            if not effective_cl_trans.endswith("/"):
+                effective_cl_trans += "/"
+            effective_cl_trans += acc_suffix
+
+        effective_placeholder_trans = placeholder_trans
+        if acc_suffix and effective_placeholder_trans:
+            if not effective_placeholder_trans.endswith("/"):
+                effective_placeholder_trans += "/"
+            effective_placeholder_trans += acc_suffix
+            
+        soup = BeautifulSoup(html, "html.parser")
+        
+        # Iterate over all tags in the document (except script)
+        for tag in soup.find_all(True):
+            if tag.name == "script":
+                continue
+            
+            # 1. Process <img> tags specifically if responsive is enabled
+            if tag.name == "img" and tag.get("src"):
+                src_val = tag["src"]
+                matched_prefix = None
+                for prefix in cl_map:
+                    if src_val.startswith(prefix):
+                        matched_prefix = prefix
+                        break
+                
+                if matched_prefix:
+                    if cl_responsive_enabled:
+                        # Clear srcset to avoid conflict
+                        if tag.get("srcset"):
+                            del tag["srcset"]
+                        # Add class cld-responsive
+                        classes = tag.get("class", [])
+                        if isinstance(classes, str):
+                            classes = classes.split()
+                        if "cld-responsive" not in classes:
+                            classes.append("cld-responsive")
+                        tag["class"] = " ".join(classes)
+                        
+                        # Set data-src and src
+                        tag["data-src"] = map_cloudinary_url(src_val, cl_cloud, cl_map, effective_cl_trans)
+                        if use_blank_placeholder:
+                            tag["src"] = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+                        else:
+                            tag["src"] = map_cloudinary_url(src_val, cl_cloud, cl_map, effective_placeholder_trans)
+                        
+                        if effective_lazyload in ("true", "native", "observer"):
+                            tag["loading"] = "lazy"
+                        continue
+                    else:
+                        tag["src"] = map_cloudinary_url(src_val, cl_cloud, cl_map, effective_cl_trans)
+                        if tag.get("srcset"):
+                            del tag["srcset"]
+                        if effective_lazyload in ("true", "native"):
+                            tag["loading"] = "lazy"
+                        continue
+            
+            # 2. For all tags (including img if not already processed above),
+            # process all attributes to map any matching URLs
+            for attr in list(tag.attrs.keys()):
+                if tag.name == "img" and attr in ("src", "data-src"):
+                    continue
+                val = tag[attr]
+                if isinstance(val, str):
+                    new_val = val
+                    for prefix, map_val in cl_map.items():
+                        if prefix in new_val:
+                            new_val = replace_urls_in_text(new_val, prefix, map_val, cl_cloud, effective_cl_trans)
+                    tag[attr] = new_val
+            
+            # 3. If tag is a style tag, replace matches in its text content
+            if tag.name == "style" and tag.string:
+                new_css = tag.string
+                for prefix, map_val in cl_map.items():
+                    if prefix in new_css:
+                        new_css = replace_urls_in_text(new_css, prefix, map_val, cl_cloud, effective_cl_trans)
+                tag.string = new_css
+                
+        # 4. Inject responsive script if enabled
+        if cl_responsive_enabled:
+            body = soup.find("body")
+            if not body:
+                body = soup
+                
+            if methodology == "legacy":
+                core_js_url = cl_responsive.get("cl_core_js", "https://unpkg.com/cloudinary-core@latest")
+                lib_script = soup.new_tag("script", src=core_js_url, type="text/javascript")
+                body.append(lib_script)
+                
+                init_script = soup.new_tag("script", type="text/javascript")
+                init_script.string = (
+                    f"\nvar cl = cloudinary.Cloudinary.new({{cloud_name: '{cl_cloud}'}});\n"
+                    "cl.responsive();\n"
+                )
+                body.append(init_script)
+            else:
+                custom_js = cl_responsive.get("cl_custom_js")
+                if custom_js:
+                    if custom_js.strip().startswith("<script"):
+                        custom_soup = BeautifulSoup(custom_js, "html.parser")
+                        for sub_tag in custom_soup.contents:
+                            body.append(sub_tag)
+                    else:
+                        custom_script = soup.new_tag("script", type="text/javascript")
+                        custom_script.string = f"\n{custom_js}\n"
+                        body.append(custom_script)
+                else:
+                    modern_script = soup.new_tag("script", type="text/javascript")
+                    if effective_lazyload == "observer":
+                        modern_script.string = (
+                            "\n(function() {\n"
+                            "  function initResponsive() {\n"
+                            "    const resizeObserver = new ResizeObserver(entries => {\n"
+                            "      for (let entry of entries) {\n"
+                            "        const img = entry.target;\n"
+                            "        const width = img.clientWidth || (img.parentElement ? img.parentElement.clientWidth : 0);\n"
+                            "        if (width > 0) {\n"
+                            "          const dpr = window.devicePixelRatio || 1;\n"
+                            "          const targetWidth = Math.ceil((width * dpr) / 100) * 100;\n"
+                            "          const dataSrc = img.getAttribute('data-src');\n"
+                            "          if (dataSrc) {\n"
+                            "            const newSrc = dataSrc.replace('w_auto', 'w_' + targetWidth);\n"
+                            "            if (img.getAttribute('src') !== newSrc) {\n"
+                            "              img.style.transition = 'filter 0.4s ease-in-out, opacity 0.4s ease-in-out';\n"
+                            "              img.style.filter = 'blur(4px)';\n"
+                            "              img.style.opacity = '0.8';\n"
+                            "              const handleLoad = () => {\n"
+                            "                img.style.filter = 'none';\n"
+                            "                img.style.opacity = '1';\n"
+                            "                img.removeEventListener('load', handleLoad);\n"
+                            "              };\n"
+                            "              img.addEventListener('load', handleLoad);\n"
+                            "              img.setAttribute('src', newSrc);\n"
+                            "              if (img.complete) {\n"
+                            "                handleLoad();\n"
+                            "              }\n"
+                            "            }\n"
+                            "          }\n"
+                            "        }\n"
+                            "      }\n"
+                            "    });\n"
+                            "    const intersectionObserver = new IntersectionObserver((entries, observer) => {\n"
+                            "      for (let entry of entries) {\n"
+                            "        if (entry.isIntersecting) {\n"
+                            "          const img = entry.target;\n"
+                            "          observer.unobserve(img);\n"
+                            "          resizeObserver.observe(img);\n"
+                            "        }\n"
+                            "      }\n"
+                            "    }, { rootMargin: '50px' });\n"
+                            "    document.querySelectorAll('img.cld-responsive').forEach(img => {\n"
+                            "      intersectionObserver.observe(img);\n"
+                            "    });\n"
+                            "  }\n"
+                            "  if (document.readyState === 'loading') {\n"
+                            "    document.addEventListener('DOMContentLoaded', initResponsive);\n"
+                            "  } else {\n"
+                            "    initResponsive();\n"
+                            "  }\n"
+                            "})();\n"
+                        )
+                    else:
+                        modern_script.string = (
+                            "\n(function() {\n"
+                            "  function initResponsive() {\n"
+                            "    const observer = new ResizeObserver(entries => {\n"
+                            "      for (let entry of entries) {\n"
+                            "        const img = entry.target;\n"
+                            "        const width = img.clientWidth || (img.parentElement ? img.parentElement.clientWidth : 0);\n"
+                            "        if (width > 0) {\n"
+                            "          const dpr = window.devicePixelRatio || 1;\n"
+                            "          const targetWidth = Math.ceil((width * dpr) / 100) * 100;\n"
+                            "          const dataSrc = img.getAttribute('data-src');\n"
+                            "          if (dataSrc) {\n"
+                            "            const newSrc = dataSrc.replace('w_auto', 'w_' + targetWidth);\n"
+                            "            if (img.getAttribute('src') !== newSrc) {\n"
+                            "              img.style.transition = 'filter 0.4s ease-in-out, opacity 0.4s ease-in-out';\n"
+                            "              img.style.filter = 'blur(4px)';\n"
+                            "              img.style.opacity = '0.8';\n"
+                            "              const handleLoad = () => {\n"
+                            "                img.style.filter = 'none';\n"
+                            "                img.style.opacity = '1';\n"
+                            "                img.removeEventListener('load', handleLoad);\n"
+                            "              };\n"
+                            "              img.addEventListener('load', handleLoad);\n"
+                            "              img.setAttribute('src', newSrc);\n"
+                            "              if (img.complete) {\n"
+                            "                handleLoad();\n"
+                            "              }\n"
+                            "            }\n"
+                            "          }\n"
+                            "        }\n"
+                            "      }\n"
+                            "    });\n"
+                            "    document.querySelectorAll('img.cld-responsive').forEach(img => {\n"
+                            "      observer.observe(img);\n"
+                            "    });\n"
+                            "  }\n"
+                            "  if (document.readyState === 'loading') {\n"
+                            "    document.addEventListener('DOMContentLoaded', initResponsive);\n"
+                            "  } else {\n"
+                            "    initResponsive();\n"
+                            "  }\n"
+                            "})();\n"
+                        )
+                    body.append(modern_script)
+                    
+        return str(soup)
+
     def pull_webflow(self) -> list[Path]:
         written: list[Path] = []
+        user_agent = self.config.get("user_agent", "fontlab_www_toolkit")
         for page in self.discover_webflow_pages():
-            html = clean_webflow_html(fetch_text(page.import_url))
+            html = self.process_page_html(fetch_text(page.import_url, user_agent=user_agent))
             page.cache_path.parent.mkdir(parents=True, exist_ok=True)
             page.cache_path.write_text(html, encoding="utf-8")
             written.append(page.cache_path)
@@ -150,14 +488,24 @@ class SiteBuilder:
         replace_directory(self.paths.build_docs, self.paths.public)
 
     def run_static_builder(self) -> None:
-        config = self.paths.src_docs / "mkdocs.yml"
-        if not config.exists():
-            raise FileNotFoundError(f"Missing site config: {config}")
-        command = [resolve_executable("properdocs"), "build", "--config-file", str(config), "--clean"]
-        try:
-            run(command, self.paths.root)
-        except FileNotFoundError:
-            run([sys.executable, "-m", "mkdocs", "build", "--config-file", str(config), "--clean"], self.paths.root)
+        config_file = self.paths.src_docs / "mkdocs.yml"
+        if not config_file.exists():
+            raise FileNotFoundError(f"Missing site config: {config_file}")
+        
+        custom_cmd = self.config.get("mkdocs_command")
+        if custom_cmd:
+            if isinstance(custom_cmd, str):
+                cmd_str = custom_cmd.format(config_file=str(config_file))
+                cmd = shlex.split(cmd_str)
+            else:
+                cmd = [str(arg).format(config_file=str(config_file)) for arg in custom_cmd]
+            run(cmd, self.paths.root)
+        else:
+            command = [resolve_executable("properdocs"), "build", "--config-file", str(config_file), "--clean"]
+            try:
+                run(command, self.paths.root)
+            except FileNotFoundError:
+                run([sys.executable, "-m", "mkdocs", "build", "--config-file", str(config_file), "--clean"], self.paths.root)
 
     def clean(self) -> None:
         for path in (self.paths.build_docs, self.paths.public):
@@ -227,8 +575,8 @@ def markdown_to_public_path(markdown_path: Path, markdown_root: Path) -> str:
     return "/" + "/".join(parts) + "/"
 
 
-def fetch_text(url: str) -> str:
-    request = urllib.request.Request(url, headers={"User-Agent": "fontlab_www_toolkit"})
+def fetch_text(url: str, user_agent: str = "fontlab_www_toolkit") -> str:
+    request = urllib.request.Request(url, headers={"User-Agent": user_agent})
     with urllib.request.urlopen(request, timeout=30) as response:
         charset = response.headers.get_content_charset() or "utf-8"
         return response.read().decode(charset, errors="replace")
@@ -249,23 +597,49 @@ def strip_webflow_badge(html: str) -> str:
     return WEBFLOW_BADGE_ANCHOR_RE.sub("", html)
 
 
-def inject_badge_hiding_css(html: str) -> str:
+def inject_badge_hiding_css(html: str, hide_css: str = WEBFLOW_BADGE_HIDE_CSS) -> str:
     """Add CSS that hides ``.w-webflow-badge`` (approach 1).
 
     Injected once before ``</head>`` (or prepended when there is no head) so the
     badge stays hidden even if a future export nests it somewhere we don't strip.
     """
-    if WEBFLOW_BADGE_HIDE_CSS in html:
+    if hide_css in html:
         return html
     match = re.search(r"</head>", html, re.IGNORECASE)
     if match:
-        return html[: match.start()] + WEBFLOW_BADGE_HIDE_CSS + html[match.start() :]
-    return WEBFLOW_BADGE_HIDE_CSS + html
+        return html[: match.start()] + hide_css + html[match.start() :]
+    return hide_css + html
 
 
 def clean_webflow_html(html: str) -> str:
     """Apply both badge-removal approaches to a fetched Webflow page."""
     return inject_badge_hiding_css(strip_webflow_badge(html))
+
+
+def map_cloudinary_url(url: str, cl_cloud: str, cl_map: dict[str, str], cl_trans: str) -> str:
+    for prefix, map_val in cl_map.items():
+        if url.startswith(prefix):
+            rest = url[len(prefix):].lstrip("/")
+            trans = cl_trans
+            if trans and not trans.endswith("/"):
+                trans += "/"
+            return f"https://res.cloudinary.com/{cl_cloud}/image/upload/{trans}{map_val}/{rest}"
+    return url
+
+
+def replace_urls_in_text(text: str, prefix: str, map_val: str, cl_cloud: str, cl_trans: str) -> str:
+    escaped_prefix = re.escape(prefix)
+    pattern = re.compile(escaped_prefix + r"[^\s\"'\)\>]*")
+    
+    def replacer(match):
+        url = match.group(0)
+        rest = url[len(prefix):].lstrip("/")
+        trans = cl_trans
+        if trans and not trans.endswith("/"):
+            trans += "/"
+        return f"https://res.cloudinary.com/{cl_cloud}/image/upload/{trans}{map_val}/{rest}"
+        
+    return pattern.sub(replacer, text)
 
 
 def convert_old_html(source: Path, title: str) -> str:

@@ -60,6 +60,68 @@ webflow-import-url: https://example.webflow.io/page
 ---
 ```
 
+## Configuration
+
+You can customize the builder's behavior using a JSON configuration file (by default `fontlab-www-toolkit.json` in the root directory, or passed via `--config` CLI option). Alternatively, individual pages can specify page-specific overrides inside the input HTML:
+
+```html
+<head>
+  <script id="fontlab-toolkit-config" type="application/json">
+  {
+    "cloudinary": {
+      "cl_responsive": {
+        "methodology": "legacy"
+      }
+    }
+  }
+  </script>
+</head>
+```
+
+### Global Overrides
+
+The following settings can be overridden in the root configuration object:
+
+* **`frontmatter_key`** (string): The YAML frontmatter key used to identify Webflow URLs. Defaults to `"webflow-import-url"`.
+* **`webflow_badge_hide_css`** (string): CSS injected to hide the Webflow badge.
+* **`old_pages_config`** (string): Path to the legacy pages mapping file. Defaults to `"src_docs/old-pages.yml"`.
+* **`mkdocs_command`** (string | array): The custom build command for MkDocs/ProperDocs. Can include the `{config_file}` placeholder.
+* **`user_agent`** (string): Custom User-Agent header used when pulling Webflow pages. Defaults to `"fontlab_www_toolkit"`.
+
+### Cloudinary Options
+
+The `cloudinary` block allows automatic mapping of image URLs to Cloudinary and setup of responsive client-side loading:
+
+```json
+{
+  "cloudinary": {
+    "cl_cloud": "mycloud",
+    "cl_map": {
+      "https://cdn.example-files.com/assets": "assets_prefix",
+      "https://images.example.com": "images_prefix"
+    },
+    "cl_trans": "c_limit,w_auto/f_auto,q_auto,dpr_auto/",
+    "cl_responsive": {
+      "cl_trans_thumb": "c_limit,w_128/f_auto,q_1/",
+      "cl_core_js": "https://unpkg.com/cloudinary-core@latest",
+      "methodology": "modern"
+    }
+  }
+}
+```
+
+* **`cl_cloud`**: Cloudinary cloud name.
+* **`cl_map`**: Map of source URL prefixes to Cloudinary upload folder prefixes. Any matching image URLs found in attributes (like `src`, `href`, `style` background-image) will be replaced.
+* **`cl_trans`**: The default Cloudinary image transformation string.
+* **`cl_responsive`**: (Optional) Enables responsive client-side images:
+  * Adds `class="cld-responsive"` to matching `<img>` elements.
+  * Sets the `src` attribute to a thumbnail transformation (using `cl_trans_thumb`).
+  * Sets the `data-src` attribute to the main transformation (using `cl_trans`).
+  * Clears `srcset` to avoid browser conflict.
+  * Injects responsive initialization scripts before the closing `</body>` tag:
+    * **`methodology: "modern"`** (Recommended): Injects a lightweight vanilla JS script using `ResizeObserver` to update image source dynamically, avoiding heavy external library dependencies.
+    * **`methodology: "legacy"`**: Injects the `cloudinary-core` library (`cl_core_js`) and invokes `cl.responsive()`.
+
 ## Deploy helpers (library use)
 
 ```python

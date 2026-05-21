@@ -155,3 +155,422 @@ def test_clean_webflow_html_applies_both_approaches() -> None:
     cleaned = clean_webflow_html(html)
     assert "w-webflow-badge" not in cleaned.replace(".w-webflow-badge{display:none !important;}", "")
     assert ".w-webflow-badge{display:none !important;}" in cleaned
+
+
+def test_config_loading_from_file_and_root(tmp_path: Path) -> None:
+    # 1. Test explicit config path loading
+    config_file = tmp_path / "custom-config.json"
+    config_file.write_text('{"user_agent": "custom_agent"}', encoding="utf-8")
+    paths = BuildPaths.from_root(tmp_path)
+    
+    builder = SiteBuilder(paths, config_path=config_file)
+    assert builder.config == {"user_agent": "custom_agent"}
+    
+    # 2. Test default config from root
+    root_config = tmp_path / "fontlab-www-toolkit.json"
+    root_config.write_text('{"user_agent": "root_agent"}', encoding="utf-8")
+    
+    builder_default = SiteBuilder(paths)
+    assert builder_default.config == {"user_agent": "root_agent"}
+
+
+def test_page_specific_config_parsing_from_html() -> None:
+    html = """
+    <html>
+      <head>
+        <script id="fontlab-toolkit-config" type="application/json">
+        {
+          "cloudinary": {
+            "cl_cloud": "custom_cloud",
+            "cl_map": {
+              "https://example.com": "ex"
+            },
+            "cl_responsive": {
+              "methodology": "legacy"
+            }
+          }
+        }
+        </script>
+      </head>
+      <body></body>
+    </html>
+    """
+    paths = BuildPaths(
+        root=Path("."),
+        src_docs=Path("."),
+        markdown=Path("."),
+        static_docs=Path("."),
+        webflow_cache=Path("."),
+        build_docs=Path("."),
+        public=Path("."),
+        old_pages_config=Path("."),
+    )
+    builder = SiteBuilder(paths)
+    processed = builder.process_page_html(html)
+    # The processed html should contain the legacy script tags since methodology was overridden to legacy in the page config
+    assert "cloudinary-core" in processed
+    assert "cloudinary.Cloudinary.new({cloud_name: 'custom_cloud'});" in processed
+
+
+def test_cloudinary_url_mapping_and_replacement() -> None:
+    html = """
+    <html>
+      <body>
+        <img src="https://cdn.prod.website-files.com/67c7070e70765599c7796390/photo.jpg" srcset="https://cdn.prod.website-files.com/67c7070e70765599c7796390/photo.jpg 2x" />
+        <div style="background-image: url('https://i.vexy.art/bg.png');"></div>
+        <a href="https://i.fontlab.com/doc.pdf">Link</a>
+      </body>
+    </html>
+    """
+    cloudinary_conf = {
+        "cl_cloud": "testcloud",
+        "cl_map": {
+            "https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw",
+            "https://i.vexy.art": "v",
+            "https://i.fontlab.com": "i"
+        },
+        "cl_trans": "c_limit,w_auto/f_auto,q_auto/",
+        "cl_responsive": {
+            "cl_trans_thumb": "c_limit,w_100/f_auto/",
+            "methodology": "modern"
+        }
+    }
+    paths = BuildPaths(
+        root=Path("."), src_docs=Path("."), markdown=Path("."), static_docs=Path("."),
+        webflow_cache=Path("."), build_docs=Path("."), public=Path("."), old_pages_config=Path(".")
+    )
+    builder = SiteBuilder(paths)
+    processed = builder.process_html_cloudinary(html, cloudinary_conf)
+    
+    # img tag should have class cld-responsive, src mapped to thumbnail, data-src mapped to cl_trans, and srcset cleared
+    assert "cld-responsive" in processed
+    assert "data-src=\"https://res.cloudinary.com/testcloud/image/upload/c_limit,w_auto/f_auto,q_auto/vw/photo.jpg\"" in processed
+    assert "src=\"https://res.cloudinary.com/testcloud/image/upload/c_limit,w_100/f_auto/vw/photo.jpg\"" in processed
+    assert "srcset" not in processed
+    
+    # Div style background url should be mapped with normal transformation
+    assert "background-image: url('https://res.cloudinary.com/testcloud/image/upload/c_limit,w_auto/f_auto,q_auto/v/bg.png')" in processed
+    
+    # anchor tag href should be mapped with normal transformation
+    assert "href=\"https://res.cloudinary.com/testcloud/image/upload/c_limit,w_auto/f_auto,q_auto/i/doc.pdf\"" in processed
+
+
+def test_cloudinary_responsive_legacy_methodology() -> None:
+    html = """
+    <html>
+      <body>
+        <img src="https://cdn.prod.website-files.com/67c7070e70765599c7796390/photo.jpg" />
+      </body>
+    </html>
+    """
+    cloudinary_conf = {
+        "cl_cloud": "testcloud",
+        "cl_map": {
+            "https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"
+        },
+        "cl_responsive": {
+            "methodology": "legacy",
+            "cl_core_js": "https://custom.cdn/cloudinary-core.js"
+        }
+    }
+    paths = BuildPaths(
+        root=Path("."), src_docs=Path("."), markdown=Path("."), static_docs=Path("."),
+        webflow_cache=Path("."), build_docs=Path("."), public=Path("."), old_pages_config=Path(".")
+    )
+    builder = SiteBuilder(paths)
+    processed = builder.process_html_cloudinary(html, cloudinary_conf)
+    
+    # Should include legacy script injection
+    assert "<script src=\"https://custom.cdn/cloudinary-core.js\" type=\"text/javascript\"></script>" in processed
+    assert "var cl = cloudinary.Cloudinary.new({cloud_name: 'testcloud'});" in processed
+    assert "cl.responsive();" in processed
+
+
+def test_cloudinary_responsive_modern_methodology() -> None:
+    html = """
+    <html>
+      <body>
+        <img src="https://cdn.prod.website-files.com/67c7070e70765599c7796390/photo.jpg" />
+      </body>
+    </html>
+    """
+    cloudinary_conf = {
+        "cl_cloud": "testcloud",
+        "cl_map": {
+            "https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"
+        },
+        "cl_responsive": {
+            "methodology": "modern"
+        }
+    }
+    paths = BuildPaths(
+        root=Path("."), src_docs=Path("."), markdown=Path("."), static_docs=Path("."),
+        webflow_cache=Path("."), build_docs=Path("."), public=Path("."), old_pages_config=Path(".")
+    )
+    builder = SiteBuilder(paths)
+    processed = builder.process_html_cloudinary(html, cloudinary_conf)
+    
+    # Should include ResizeObserver script injection
+    assert "ResizeObserver" in processed
+    assert "cld-responsive" in processed
+    # But NOT the legacy script or cloudinary-core reference
+    assert "cloudinary-core" not in processed
+
+
+def test_configurable_settings_overrides(tmp_path: Path) -> None:
+    # Test frontmatter key and old pages config path overrides
+    config_file = tmp_path / "config.json"
+    config_file.write_text(
+        '{"frontmatter_key": "custom-import-url", "old_pages_config": "custom-old-pages.yml"}',
+        encoding="utf-8"
+    )
+    paths = BuildPaths.from_root(tmp_path)
+    builder = SiteBuilder(paths, config_path=config_file)
+    
+    # Check frontmatter key
+    markdown_dir = tmp_path / "src_docs/md"
+    markdown_dir.mkdir(parents=True)
+    (markdown_dir / "page.md").write_text(
+        "---\ntitle: Page\ncustom-import-url: https://example.test/import\n---\n# Content\n",
+        encoding="utf-8"
+    )
+    pages = builder.discover_webflow_pages()
+    assert len(pages) == 1
+    assert pages[0].import_url == "https://example.test/import"
+    
+    # Check old pages config path
+    (tmp_path / "custom-old-pages.yml").write_text(
+        "old_public: legacy-dir\npages:\n  about.md: about.html\n",
+        encoding="utf-8"
+    )
+    mapping = builder.load_old_pages()
+    assert mapping is not None
+    assert mapping.old_public == (tmp_path / "legacy-dir").resolve()
+    assert mapping.pages == {"about.md": "about.html"}
+
+
+def test_mkdocs_command_override(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.json"
+    config_file.write_text(
+        '{"mkdocs_command": "echo build {config_file}"}',
+        encoding="utf-8"
+    )
+    
+    # Setup mock src_docs/mkdocs.yml so run_static_builder doesn't raise FileNotFoundError
+    src_docs = tmp_path / "src_docs"
+    src_docs.mkdir()
+    (src_docs / "mkdocs.yml").write_text("site_name: Test", encoding="utf-8")
+    
+    paths = BuildPaths.from_root(tmp_path)
+    builder = SiteBuilder(paths, config_path=config_file)
+    builder.run_static_builder()
+
+
+def test_cloudinary_lazyload_options() -> None:
+    html = """
+    <html>
+      <body>
+        <img src="https://cdn.prod.website-files.com/67c7070e70765599c7796390/photo.jpg" />
+      </body>
+    </html>
+    """
+    
+    # 1. lazyload=True (equivalent to "observer" when methodology is "modern")
+    conf_observer = {
+        "cl_cloud": "testcloud",
+        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
+        "cl_responsive": {"methodology": "modern", "lazyload": True}
+    }
+    builder = SiteBuilder(BuildPaths(Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path(".")))
+    processed = builder.process_html_cloudinary(html, conf_observer)
+    assert 'loading="lazy"' in processed
+    assert "IntersectionObserver" in processed
+    
+    # 2. lazyload="native"
+    conf_native = {
+        "cl_cloud": "testcloud",
+        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
+        "cl_responsive": {"methodology": "modern", "lazyload": "native"}
+    }
+    processed = builder.process_html_cloudinary(html, conf_native)
+    assert 'loading="lazy"' in processed
+    assert "IntersectionObserver" not in processed
+    assert "ResizeObserver" in processed
+
+    # 3. lazyload="observer"
+    conf_obs_str = {
+        "cl_cloud": "testcloud",
+        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
+        "cl_responsive": {"methodology": "modern", "lazyload": "observer"}
+    }
+    processed = builder.process_html_cloudinary(html, conf_obs_str)
+    assert 'loading="lazy"' in processed
+    assert "IntersectionObserver" in processed
+
+    # 4. lazyload=False
+    conf_false = {
+        "cl_cloud": "testcloud",
+        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
+        "cl_responsive": {"methodology": "modern", "lazyload": False}
+    }
+    processed = builder.process_html_cloudinary(html, conf_false)
+    assert 'loading="lazy"' not in processed
+    assert "IntersectionObserver" not in processed
+    assert "ResizeObserver" in processed
+
+
+def test_cloudinary_placeholder_options() -> None:
+    html = """
+    <html>
+      <body>
+        <img src="https://cdn.prod.website-files.com/67c7070e70765599c7796390/photo.jpg" />
+      </body>
+    </html>
+    """
+    builder = SiteBuilder(BuildPaths(Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path(".")))
+    
+    # 1. placeholder="blur" -> e_blur:2000,f_auto,q_auto:low
+    conf = {
+        "cl_cloud": "testcloud",
+        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
+        "cl_responsive": {"methodology": "modern", "placeholder": "blur"}
+    }
+    processed = builder.process_html_cloudinary(html, conf)
+    assert "e_blur:2000,f_auto,q_auto:low" in processed
+
+    # 2. placeholder="pixelate" -> e_pixelate:100,f_auto,q_auto:low
+    conf = {
+        "cl_cloud": "testcloud",
+        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
+        "cl_responsive": {"methodology": "modern", "placeholder": "pixelate"}
+    }
+    processed = builder.process_html_cloudinary(html, conf)
+    assert "e_pixelate:100,f_auto,q_auto:low" in processed
+
+    # 3. placeholder="vectorize" -> e_vectorize,f_auto,q_auto:low
+    conf = {
+        "cl_cloud": "testcloud",
+        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
+        "cl_responsive": {"methodology": "modern", "placeholder": "vectorize"}
+    }
+    processed = builder.process_html_cloudinary(html, conf)
+    assert "e_vectorize,f_auto,q_auto:low" in processed
+
+    # 4. placeholder="predominant" -> c_fill,w_1,h_1/f_auto,q_auto:low
+    conf = {
+        "cl_cloud": "testcloud",
+        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
+        "cl_responsive": {"methodology": "modern", "placeholder": "predominant"}
+    }
+    processed = builder.process_html_cloudinary(html, conf)
+    assert "c_fill,w_1,h_1/f_auto,q_auto:low" in processed
+
+    # 5. placeholder="predominant-color" -> c_fill,w_1,h_1/f_auto,q_auto:low
+    conf = {
+        "cl_cloud": "testcloud",
+        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
+        "cl_responsive": {"methodology": "modern", "placeholder": "predominant-color"}
+    }
+    processed = builder.process_html_cloudinary(html, conf)
+    assert "c_fill,w_1,h_1/f_auto,q_auto:low" in processed
+
+    # 6. placeholder="custom-trans-string" -> custom-trans-string
+    conf = {
+        "cl_cloud": "testcloud",
+        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
+        "cl_responsive": {"methodology": "modern", "placeholder": "custom-trans-string"}
+    }
+    processed = builder.process_html_cloudinary(html, conf)
+    assert "custom-trans-string" in processed
+
+    # 7. placeholder=False -> blank GIF
+    conf = {
+        "cl_cloud": "testcloud",
+        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
+        "cl_responsive": {"methodology": "modern", "placeholder": False}
+    }
+    processed = builder.process_html_cloudinary(html, conf)
+    assert 'src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"' in processed
+
+
+def test_cloudinary_accessibility_options() -> None:
+    html = """
+    <html>
+      <body>
+        <img src="https://cdn.prod.website-files.com/67c7070e70765599c7796390/photo.jpg" />
+      </body>
+    </html>
+    """
+    builder = SiteBuilder(BuildPaths(Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path(".")))
+
+    # 1. accessibility="colorblind" -> e_assist_colorblind
+    conf = {
+        "cl_cloud": "testcloud",
+        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
+        "cl_responsive": {
+            "methodology": "modern",
+            "placeholder": "blur",
+            "accessibility": "colorblind"
+        }
+    }
+    processed = builder.process_html_cloudinary(html, conf)
+    # Accessibility effect must be applied to both high-quality source (data-src) and placeholder (src)
+    assert "/e_assist_colorblind/vw/photo.jpg" in processed
+    assert "e_blur:2000,f_auto,q_auto:low/e_assist_colorblind/vw/photo.jpg" in processed
+
+    # 2. accessibility="monochrome" -> e_grayscale
+    conf = {
+        "cl_cloud": "testcloud",
+        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
+        "cl_responsive": {
+            "methodology": "modern",
+            "placeholder": "blur",
+            "accessibility": "monochrome"
+        }
+    }
+    processed = builder.process_html_cloudinary(html, conf)
+    assert "/e_grayscale/vw/photo.jpg" in processed
+    assert "e_blur:2000,f_auto,q_auto:low/e_grayscale/vw/photo.jpg" in processed
+
+    # 3. accessibility="darkmode" -> e_brightness_hsb:-30
+    conf = {
+        "cl_cloud": "testcloud",
+        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
+        "cl_responsive": {
+            "methodology": "modern",
+            "placeholder": "blur",
+            "accessibility": "darkmode"
+        }
+    }
+    processed = builder.process_html_cloudinary(html, conf)
+    assert "/e_brightness_hsb:-30/vw/photo.jpg" in processed
+    assert "e_blur:2000,f_auto,q_auto:low/e_brightness_hsb:-30/vw/photo.jpg" in processed
+
+    # 4. accessibility="brightmode" -> e_brightness_hsb:30
+    conf = {
+        "cl_cloud": "testcloud",
+        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
+        "cl_responsive": {
+            "methodology": "modern",
+            "placeholder": "blur",
+            "accessibility": "brightmode"
+        }
+    }
+    processed = builder.process_html_cloudinary(html, conf)
+    assert "/e_brightness_hsb:30/vw/photo.jpg" in processed
+    assert "e_blur:2000,f_auto,q_auto:low/e_brightness_hsb:30/vw/photo.jpg" in processed
+
+    # 5. accessibility="custom-acc-effect"
+    conf = {
+        "cl_cloud": "testcloud",
+        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
+        "cl_responsive": {
+            "methodology": "modern",
+            "placeholder": "blur",
+            "accessibility": "custom-acc-effect"
+        }
+    }
+    processed = builder.process_html_cloudinary(html, conf)
+    assert "/custom-acc-effect/vw/photo.jpg" in processed
+    assert "e_blur:2000,f_auto,q_auto:low/custom-acc-effect/vw/photo.jpg" in processed
+
