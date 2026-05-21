@@ -622,3 +622,28 @@ def test_cloudinary_excludes_non_media_assets() -> None:
     assert 'src="https://res.cloudinary.com/testcloud/image/upload/c_limit,w_auto/f_auto,q_auto/vw/images/photo.jpg"' in processed
 
 
+def test_cloudinary_excludes_nested_fetch_urls() -> None:
+    html = """
+    <html>
+      <body>
+        <video poster="https://res.cloudinary.com/testcloud/image/fetch/q_60/f_auto/https://i.vexy.art/vl/websiteart/poster.png"></video>
+        <img src="https://i.vexy.art/vl/normal.png" />
+      </body>
+    </html>
+    """
+    conf = {
+        "cl_cloud": "testcloud",
+        "cl_map": {
+            "https://i.vexy.art": "v"
+        },
+        "cl_trans": "c_limit,w_auto/f_auto,q_auto/"
+    }
+    builder = SiteBuilder(BuildPaths(Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path(".")))
+    processed = builder.process_html_cloudinary(html, conf)
+
+    # The nested URL must NOT be touched
+    assert 'poster="https://res.cloudinary.com/testcloud/image/fetch/q_60/f_auto/https://i.vexy.art/vl/websiteart/poster.png"' in processed
+    # The normal image URL must be replaced
+    assert 'src="https://res.cloudinary.com/testcloud/image/upload/c_limit,w_auto/f_auto,q_auto/v/vl/normal.png"' in processed
+
+

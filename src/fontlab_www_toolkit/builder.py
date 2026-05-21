@@ -650,6 +650,15 @@ def replace_urls_in_text(text: str, prefix: str, map_val: str, cl_cloud: str, cl
     
     def replacer(match):
         url = match.group(0)
+        # Check if the matched URL is nested inside a Cloudinary fetch URL
+        start = match.start()
+        before = text[max(0, start - 150):start]
+        if "res.cloudinary.com" in before:
+            last_idx = before.rfind("res.cloudinary.com")
+            middle = before[last_idx:]
+            if not any(char in middle for char in (" ", '"', "'", ")", ">", "<", "\n", "\t")):
+                return url
+                
         if not is_image_or_allowed_media(url):
             return url
         rest = url[len(prefix):].lstrip("/")
