@@ -251,8 +251,8 @@ def test_cloudinary_url_mapping_and_replacement() -> None:
     # Div style background url should be mapped with normal transformation
     assert "background-image: url('https://res.cloudinary.com/testcloud/image/upload/c_limit,w_auto/f_auto,q_auto/v/bg.png')" in processed
     
-    # anchor tag href should be mapped with normal transformation
-    assert "href=\"https://res.cloudinary.com/testcloud/image/upload/c_limit,w_auto/f_auto,q_auto/i/doc.pdf\"" in processed
+    # anchor tag href with non-media (pdf) should remain untouched
+    assert "href=\"https://i.fontlab.com/doc.pdf\"" in processed
 
 
 def test_cloudinary_responsive_legacy_methodology() -> None:
@@ -594,6 +594,8 @@ def test_cloudinary_excludes_non_media_assets() -> None:
       </head>
       <body>
         <img src="https://cdn.prod.website-files.com/67c7070e70765599c7796390/images/photo.jpg" />
+        <a href="https://cdn.prod.website-files.com/67c7070e70765599c7796390/doc.pdf">PDF</a>
+        <a href="https://cdn.prod.website-files.com/67c7070e70765599c7796390/archive.zip">ZIP</a>
       </body>
     </html>
     """
@@ -607,11 +609,13 @@ def test_cloudinary_excludes_non_media_assets() -> None:
     builder = SiteBuilder(BuildPaths(Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path(".")))
     processed = builder.process_html_cloudinary(html, conf)
     
-    # CSS link, JS script, and font woff2 urls must remain untouched
+    # CSS link, JS script, font woff2, pdf, and zip urls must remain untouched
     assert 'href="https://cdn.prod.website-files.com/67c7070e70765599c7796390/css/vexy.webflow.css"' in processed
     assert 'src="https://cdn.prod.website-files.com/67c7070e70765599c7796390/js/webflow.js"' in processed
     assert 'href="https://cdn.prod.website-files.com/67c7070e70765599c7796390/manifest.json"' in processed
     assert "url('https://cdn.prod.website-files.com/67c7070e70765599c7796390/fonts/test.woff2')" in processed
+    assert 'href="https://cdn.prod.website-files.com/67c7070e70765599c7796390/doc.pdf"' in processed
+    assert 'href="https://cdn.prod.website-files.com/67c7070e70765599c7796390/archive.zip"' in processed
 
     # Images must be replaced
     assert "url('https://res.cloudinary.com/testcloud/image/upload/c_limit,w_auto/f_auto,q_auto/vw/images/bg.png')" in processed

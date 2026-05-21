@@ -619,11 +619,16 @@ def clean_webflow_html(html: str) -> str:
 def is_image_or_allowed_media(url: str) -> bool:
     # Strip query parameters and fragment identifier
     path = url.split("?")[0].split("#")[0].lower()
-    excluded_extensions = {
-        ".css", ".js", ".json", ".woff", ".woff2", ".ttf", ".otf", ".eot",
-        ".html", ".htm", ".webmanifest", ".map"
+    allowed_extensions = {
+        # Images
+        ".png", ".jpg", ".jpeg", ".webp", ".svg", ".gif", ".avif", ".ico",
+        ".heic", ".heif", ".tiff", ".bmp",
+        # Videos
+        ".mp4", ".webm", ".ogv", ".mov",
+        # Audio
+        ".mp3", ".wav", ".ogg", ".aac", ".flac", ".m4a"
     }
-    return not any(path.endswith(ext) for ext in excluded_extensions)
+    return any(path.endswith(ext) for ext in allowed_extensions)
 
 
 def map_cloudinary_url(url: str, cl_cloud: str, cl_map: dict[str, str], cl_trans: str) -> str:
