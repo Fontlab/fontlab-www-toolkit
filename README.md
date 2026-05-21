@@ -1,4 +1,3 @@
-<!-- this_file: README.md -->
 
 # fontlab-www-toolkit
 
