@@ -17,4 +17,5 @@ cd "${SCRIPT_DIR}"
 uvx hatch clean
 uvx gitnextver --directory .
 uv build
+uvx gitnextver --directory .
 uv publish
