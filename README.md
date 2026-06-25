@@ -27,8 +27,8 @@ Commands:
 
 | Command | Effect |
 |---|---|
-| `build [--skip_webflow]` | Pull Webflow stubs, build with MkDocs/ProperDocs, overlay `wf_cache/` + `static_docs/`, publish to `public/`. |
-| `pull-webflow` | Refresh `wf_cache/` only. |
+| `build [--skip_webflow] [--update_stubs]` | Pull Webflow stubs, build with MkDocs/ProperDocs, overlay `wf_cache/` + `static_docs/`, publish to `public/`. |
+| `pull-webflow [--update_stubs]` | Refresh `wf_cache/` only. |
 | `convert-old` | Regenerate OLD pages from `src_docs/old-pages.yml`. |
 | `clean` | Delete `build_docs/` and `public/`. |
 | `setup [--venv PATH] [--clear]` | Create / refresh a uv venv for the admin pipeline. |
@@ -59,6 +59,24 @@ webflow-import-url: https://example.webflow.io/page
 ---
 ```
 
+### Refreshing stub bodies (`--update_stubs`)
+
+Normally only `wf_cache/` is refreshed; the stub Markdown body stays as a
+placeholder (the cached HTML overlays it at build time). Pass `--update_stubs`
+to `pull-webflow` or `build` to also rewrite each stub's **body** from the
+freshly cached HTML, while preserving the stub's **frontmatter** verbatim:
+
+```bash
+fontlab-www-toolkit pull-webflow --update_stubs
+```
+
+For each stub it strips non-prose noise (`<script>`/`<style>`/`<noscript>` and
+hidden Webflow *Windflow* plugin metadata), serves the cleaned cached HTML over
+a loopback HTTP server, and runs [`url22md`](https://github.com/twardoch/url22md)
+to extract Markdown. This requires the `url22md` CLI on `PATH` (or set
+`url22md_bin` in config); it is an external runtime tool, not a packaged
+dependency.
+
 ## Configuration
 
 You can customize the builder's behavior using a JSON configuration file (by default `fontlab-www-toolkit.json` in the root directory, or passed via `--config` CLI option). Alternatively, individual pages can specify page-specific overrides inside the input HTML:
@@ -86,6 +104,10 @@ The following settings can be overridden in the root configuration object:
 * **`old_pages_config`** (string): Path to the legacy pages mapping file. Defaults to `"src_docs/old-pages.yml"`.
 * **`mkdocs_command`** (string | array): The custom build command for MkDocs/ProperDocs. Can include the `{config_file}` placeholder.
 * **`user_agent`** (string): Custom User-Agent header used when pulling Webflow pages. Defaults to `"fontlab_www_toolkit"`.
+* **`split_google_fonts`** (bool): When true (default), split a multi-family `fonts.googleapis.com/css2?family=A&family=B&…` link into one `?family=X&display=swap` link per family. This keeps web fonts loading even if a downstream step truncates the served URL at the first `&` (otherwise only the first family loads and the rest fall back to a system font).
+* **`url22md_bin`** (string): Path to the `url22md` executable used by `--update_stubs`. Defaults to whatever is found on `PATH`.
+* **`url22md_tool`** (int | null): Forces a specific `url22md` extraction engine (`1`=trafilatura, `3`=readability, …). Defaults to `1` for offline, deterministic extraction; set to `null` to let url22md run its full fallback chain (may reach cloud tools).
+* **`url22md_timeout`** (int): Per-page extraction timeout in seconds. Defaults to `60`.
 
 ### Cloudinary Options
 

@@ -4,13 +4,18 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
+
+import pytest
 
 from fontlab_www_toolkit.builder import (
     BuildPaths,
     SiteBuilder,
+    WebflowPage,
     clean_webflow_html,
     convert_old_html,
+    extract_markdown_via_url22md,
     extract_old_page_content,
     find_uv,
     inject_badge_hiding_css,
@@ -20,6 +25,8 @@ from fontlab_www_toolkit.builder import (
     parse_frontmatter,
     remove_html_blocks,
     replace_directory,
+    split_frontmatter,
+    split_google_fonts_links,
     strip_webflow_badge,
 )
 
@@ -49,7 +56,9 @@ def test_markdown_to_public_path_when_index_then_drops_index() -> None:
     assert markdown_to_public_path(root / "lines/index.md", root) == "/lines/"
 
 
-def test_discover_webflow_pages_when_placeholder_exists_then_cache_path_matches(tmp_path: Path) -> None:
+def test_discover_webflow_pages_when_placeholder_exists_then_cache_path_matches(
+    tmp_path: Path,
+) -> None:
     markdown = tmp_path / "src_docs/md/font-converter"
     markdown.mkdir(parents=True)
     (markdown / "transtype.md").write_text(
@@ -153,7 +162,9 @@ def test_inject_badge_hiding_css_when_no_head_then_prepends() -> None:
 def test_clean_webflow_html_applies_both_approaches() -> None:
     html = f"<html><head></head><body>{BADGE_HTML}</body></html>"
     cleaned = clean_webflow_html(html)
-    assert "w-webflow-badge" not in cleaned.replace(".w-webflow-badge{display:none !important;}", "")
+    assert "w-webflow-badge" not in cleaned.replace(
+        ".w-webflow-badge{display:none !important;}", ""
+    )
     assert ".w-webflow-badge{display:none !important;}" in cleaned
 
 
@@ -162,14 +173,14 @@ def test_config_loading_from_file_and_root(tmp_path: Path) -> None:
     config_file = tmp_path / "custom-config.json"
     config_file.write_text('{"user_agent": "custom_agent"}', encoding="utf-8")
     paths = BuildPaths.from_root(tmp_path)
-    
+
     builder = SiteBuilder(paths, config_path=config_file)
     assert builder.config == {"user_agent": "custom_agent"}
-    
+
     # 2. Test default config from root
     root_config = tmp_path / "fontlab-www-toolkit.json"
     root_config.write_text('{"user_agent": "root_agent"}', encoding="utf-8")
-    
+
     builder_default = SiteBuilder(paths)
     assert builder_default.config == {"user_agent": "root_agent"}
 
@@ -227,32 +238,44 @@ def test_cloudinary_url_mapping_and_replacement() -> None:
         "cl_map": {
             "https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw",
             "https://i.vexy.art": "v",
-            "https://i.fontlab.com": "i"
+            "https://i.fontlab.com": "i",
         },
         "cl_trans": "c_limit,w_auto/f_auto,q_auto/",
-        "cl_responsive": {
-            "cl_trans_thumb": "c_limit,w_100/f_auto/",
-            "methodology": "modern"
-        }
+        "cl_responsive": {"cl_trans_thumb": "c_limit,w_100/f_auto/", "methodology": "modern"},
     }
     paths = BuildPaths(
-        root=Path("."), src_docs=Path("."), markdown=Path("."), static_docs=Path("."),
-        webflow_cache=Path("."), build_docs=Path("."), public=Path("."), old_pages_config=Path(".")
+        root=Path("."),
+        src_docs=Path("."),
+        markdown=Path("."),
+        static_docs=Path("."),
+        webflow_cache=Path("."),
+        build_docs=Path("."),
+        public=Path("."),
+        old_pages_config=Path("."),
     )
     builder = SiteBuilder(paths)
     processed = builder.process_html_cloudinary(html, cloudinary_conf)
-    
+
     # img tag should have class cld-responsive, src mapped to thumbnail, data-src mapped to cl_trans, and srcset cleared
     assert "cld-responsive" in processed
-    assert "data-src=\"https://res.cloudinary.com/testcloud/image/upload/c_limit,w_auto/f_auto,q_auto/vw/photo.jpg\"" in processed
-    assert "src=\"https://res.cloudinary.com/testcloud/image/upload/c_limit,w_100/f_auto/vw/photo.jpg\"" in processed
+    assert (
+        'data-src="https://res.cloudinary.com/testcloud/image/upload/c_limit,w_auto/f_auto,q_auto/vw/photo.jpg"'
+        in processed
+    )
+    assert (
+        'src="https://res.cloudinary.com/testcloud/image/upload/c_limit,w_100/f_auto/vw/photo.jpg"'
+        in processed
+    )
     assert "srcset" not in processed
-    
+
     # Div style background url should be mapped with normal transformation
-    assert "background-image: url('https://res.cloudinary.com/testcloud/image/upload/c_limit,w_auto/f_auto,q_auto/v/bg.png')" in processed
-    
+    assert (
+        "background-image: url('https://res.cloudinary.com/testcloud/image/upload/c_limit,w_auto/f_auto,q_auto/v/bg.png')"
+        in processed
+    )
+
     # anchor tag href with non-media (pdf) should remain untouched
-    assert "href=\"https://i.fontlab.com/doc.pdf\"" in processed
+    assert 'href="https://i.fontlab.com/doc.pdf"' in processed
 
 
 def test_cloudinary_responsive_legacy_methodology() -> None:
@@ -265,23 +288,30 @@ def test_cloudinary_responsive_legacy_methodology() -> None:
     """
     cloudinary_conf = {
         "cl_cloud": "testcloud",
-        "cl_map": {
-            "https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"
-        },
+        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
         "cl_responsive": {
             "methodology": "legacy",
-            "cl_core_js": "https://custom.cdn/cloudinary-core.js"
-        }
+            "cl_core_js": "https://custom.cdn/cloudinary-core.js",
+        },
     }
     paths = BuildPaths(
-        root=Path("."), src_docs=Path("."), markdown=Path("."), static_docs=Path("."),
-        webflow_cache=Path("."), build_docs=Path("."), public=Path("."), old_pages_config=Path(".")
+        root=Path("."),
+        src_docs=Path("."),
+        markdown=Path("."),
+        static_docs=Path("."),
+        webflow_cache=Path("."),
+        build_docs=Path("."),
+        public=Path("."),
+        old_pages_config=Path("."),
     )
     builder = SiteBuilder(paths)
     processed = builder.process_html_cloudinary(html, cloudinary_conf)
-    
+
     # Should include legacy script injection
-    assert "<script src=\"https://custom.cdn/cloudinary-core.js\" type=\"text/javascript\"></script>" in processed
+    assert (
+        '<script src="https://custom.cdn/cloudinary-core.js" type="text/javascript"></script>'
+        in processed
+    )
     assert "var cl = cloudinary.Cloudinary.new({cloud_name: 'testcloud'});" in processed
     assert "cl.responsive();" in processed
 
@@ -296,20 +326,22 @@ def test_cloudinary_responsive_modern_methodology() -> None:
     """
     cloudinary_conf = {
         "cl_cloud": "testcloud",
-        "cl_map": {
-            "https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"
-        },
-        "cl_responsive": {
-            "methodology": "modern"
-        }
+        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
+        "cl_responsive": {"methodology": "modern"},
     }
     paths = BuildPaths(
-        root=Path("."), src_docs=Path("."), markdown=Path("."), static_docs=Path("."),
-        webflow_cache=Path("."), build_docs=Path("."), public=Path("."), old_pages_config=Path(".")
+        root=Path("."),
+        src_docs=Path("."),
+        markdown=Path("."),
+        static_docs=Path("."),
+        webflow_cache=Path("."),
+        build_docs=Path("."),
+        public=Path("."),
+        old_pages_config=Path("."),
     )
     builder = SiteBuilder(paths)
     processed = builder.process_html_cloudinary(html, cloudinary_conf)
-    
+
     # Should include ResizeObserver script injection
     assert "ResizeObserver" in processed
     assert "cld-responsive" in processed
@@ -322,26 +354,25 @@ def test_configurable_settings_overrides(tmp_path: Path) -> None:
     config_file = tmp_path / "config.json"
     config_file.write_text(
         '{"frontmatter_key": "custom-import-url", "old_pages_config": "custom-old-pages.yml"}',
-        encoding="utf-8"
+        encoding="utf-8",
     )
     paths = BuildPaths.from_root(tmp_path)
     builder = SiteBuilder(paths, config_path=config_file)
-    
+
     # Check frontmatter key
     markdown_dir = tmp_path / "src_docs/md"
     markdown_dir.mkdir(parents=True)
     (markdown_dir / "page.md").write_text(
         "---\ntitle: Page\ncustom-import-url: https://example.test/import\n---\n# Content\n",
-        encoding="utf-8"
+        encoding="utf-8",
     )
     pages = builder.discover_webflow_pages()
     assert len(pages) == 1
     assert pages[0].import_url == "https://example.test/import"
-    
+
     # Check old pages config path
     (tmp_path / "custom-old-pages.yml").write_text(
-        "old_public: legacy-dir\npages:\n  about.md: about.html\n",
-        encoding="utf-8"
+        "old_public: legacy-dir\npages:\n  about.md: about.html\n", encoding="utf-8"
     )
     mapping = builder.load_old_pages()
     assert mapping is not None
@@ -351,16 +382,13 @@ def test_configurable_settings_overrides(tmp_path: Path) -> None:
 
 def test_mkdocs_command_override(tmp_path: Path) -> None:
     config_file = tmp_path / "config.json"
-    config_file.write_text(
-        '{"mkdocs_command": "echo build {config_file}"}',
-        encoding="utf-8"
-    )
-    
+    config_file.write_text('{"mkdocs_command": "echo build {config_file}"}', encoding="utf-8")
+
     # Setup mock src_docs/mkdocs.yml so run_static_builder doesn't raise FileNotFoundError
     src_docs = tmp_path / "src_docs"
     src_docs.mkdir()
     (src_docs / "mkdocs.yml").write_text("site_name: Test", encoding="utf-8")
-    
+
     paths = BuildPaths.from_root(tmp_path)
     builder = SiteBuilder(paths, config_path=config_file)
     builder.run_static_builder()
@@ -374,23 +402,27 @@ def test_cloudinary_lazyload_options() -> None:
       </body>
     </html>
     """
-    
+
     # 1. lazyload=True (equivalent to "observer" when methodology is "modern")
     conf_observer = {
         "cl_cloud": "testcloud",
         "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
-        "cl_responsive": {"methodology": "modern", "lazyload": True}
+        "cl_responsive": {"methodology": "modern", "lazyload": True},
     }
-    builder = SiteBuilder(BuildPaths(Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path(".")))
+    builder = SiteBuilder(
+        BuildPaths(
+            Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path(".")
+        )
+    )
     processed = builder.process_html_cloudinary(html, conf_observer)
     assert 'loading="lazy"' in processed
     assert "IntersectionObserver" in processed
-    
+
     # 2. lazyload="native"
     conf_native = {
         "cl_cloud": "testcloud",
         "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
-        "cl_responsive": {"methodology": "modern", "lazyload": "native"}
+        "cl_responsive": {"methodology": "modern", "lazyload": "native"},
     }
     processed = builder.process_html_cloudinary(html, conf_native)
     assert 'loading="lazy"' in processed
@@ -401,7 +433,7 @@ def test_cloudinary_lazyload_options() -> None:
     conf_obs_str = {
         "cl_cloud": "testcloud",
         "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
-        "cl_responsive": {"methodology": "modern", "lazyload": "observer"}
+        "cl_responsive": {"methodology": "modern", "lazyload": "observer"},
     }
     processed = builder.process_html_cloudinary(html, conf_obs_str)
     assert 'loading="lazy"' in processed
@@ -411,7 +443,7 @@ def test_cloudinary_lazyload_options() -> None:
     conf_false = {
         "cl_cloud": "testcloud",
         "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
-        "cl_responsive": {"methodology": "modern", "lazyload": False}
+        "cl_responsive": {"methodology": "modern", "lazyload": False},
     }
     processed = builder.process_html_cloudinary(html, conf_false)
     assert 'loading="lazy"' not in processed
@@ -427,13 +459,17 @@ def test_cloudinary_placeholder_options() -> None:
       </body>
     </html>
     """
-    builder = SiteBuilder(BuildPaths(Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path(".")))
-    
+    builder = SiteBuilder(
+        BuildPaths(
+            Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path(".")
+        )
+    )
+
     # 1. placeholder="blur" -> e_blur:2000,f_auto,q_auto:low
     conf = {
         "cl_cloud": "testcloud",
         "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
-        "cl_responsive": {"methodology": "modern", "placeholder": "blur"}
+        "cl_responsive": {"methodology": "modern", "placeholder": "blur"},
     }
     processed = builder.process_html_cloudinary(html, conf)
     assert "e_blur:2000,f_auto,q_auto:low" in processed
@@ -442,7 +478,7 @@ def test_cloudinary_placeholder_options() -> None:
     conf = {
         "cl_cloud": "testcloud",
         "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
-        "cl_responsive": {"methodology": "modern", "placeholder": "pixelate"}
+        "cl_responsive": {"methodology": "modern", "placeholder": "pixelate"},
     }
     processed = builder.process_html_cloudinary(html, conf)
     assert "e_pixelate:100,f_auto,q_auto:low" in processed
@@ -451,7 +487,7 @@ def test_cloudinary_placeholder_options() -> None:
     conf = {
         "cl_cloud": "testcloud",
         "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
-        "cl_responsive": {"methodology": "modern", "placeholder": "vectorize"}
+        "cl_responsive": {"methodology": "modern", "placeholder": "vectorize"},
     }
     processed = builder.process_html_cloudinary(html, conf)
     assert "e_vectorize,f_auto,q_auto:low" in processed
@@ -460,7 +496,7 @@ def test_cloudinary_placeholder_options() -> None:
     conf = {
         "cl_cloud": "testcloud",
         "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
-        "cl_responsive": {"methodology": "modern", "placeholder": "predominant"}
+        "cl_responsive": {"methodology": "modern", "placeholder": "predominant"},
     }
     processed = builder.process_html_cloudinary(html, conf)
     assert "c_fill,w_1,h_1/f_auto,q_auto:low" in processed
@@ -469,7 +505,7 @@ def test_cloudinary_placeholder_options() -> None:
     conf = {
         "cl_cloud": "testcloud",
         "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
-        "cl_responsive": {"methodology": "modern", "placeholder": "predominant-color"}
+        "cl_responsive": {"methodology": "modern", "placeholder": "predominant-color"},
     }
     processed = builder.process_html_cloudinary(html, conf)
     assert "c_fill,w_1,h_1/f_auto,q_auto:low" in processed
@@ -478,7 +514,7 @@ def test_cloudinary_placeholder_options() -> None:
     conf = {
         "cl_cloud": "testcloud",
         "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
-        "cl_responsive": {"methodology": "modern", "placeholder": "custom-trans-string"}
+        "cl_responsive": {"methodology": "modern", "placeholder": "custom-trans-string"},
     }
     processed = builder.process_html_cloudinary(html, conf)
     assert "custom-trans-string" in processed
@@ -487,10 +523,13 @@ def test_cloudinary_placeholder_options() -> None:
     conf = {
         "cl_cloud": "testcloud",
         "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
-        "cl_responsive": {"methodology": "modern", "placeholder": False}
+        "cl_responsive": {"methodology": "modern", "placeholder": False},
     }
     processed = builder.process_html_cloudinary(html, conf)
-    assert 'src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"' in processed
+    assert (
+        'src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"'
+        in processed
+    )
 
 
 def test_cloudinary_accessibility_options() -> None:
@@ -501,7 +540,11 @@ def test_cloudinary_accessibility_options() -> None:
       </body>
     </html>
     """
-    builder = SiteBuilder(BuildPaths(Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path(".")))
+    builder = SiteBuilder(
+        BuildPaths(
+            Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path(".")
+        )
+    )
 
     # 1. accessibility="colorblind" -> e_assist_colorblind
     conf = {
@@ -510,8 +553,8 @@ def test_cloudinary_accessibility_options() -> None:
         "cl_responsive": {
             "methodology": "modern",
             "placeholder": "blur",
-            "accessibility": "colorblind"
-        }
+            "accessibility": "colorblind",
+        },
     }
     processed = builder.process_html_cloudinary(html, conf)
     # Accessibility effect must be applied to both high-quality source (data-src) and placeholder (src)
@@ -525,8 +568,8 @@ def test_cloudinary_accessibility_options() -> None:
         "cl_responsive": {
             "methodology": "modern",
             "placeholder": "blur",
-            "accessibility": "monochrome"
-        }
+            "accessibility": "monochrome",
+        },
     }
     processed = builder.process_html_cloudinary(html, conf)
     assert "/e_grayscale/vw/photo.jpg" in processed
@@ -539,8 +582,8 @@ def test_cloudinary_accessibility_options() -> None:
         "cl_responsive": {
             "methodology": "modern",
             "placeholder": "blur",
-            "accessibility": "darkmode"
-        }
+            "accessibility": "darkmode",
+        },
     }
     processed = builder.process_html_cloudinary(html, conf)
     assert "/e_brightness_hsb:-30/vw/photo.jpg" in processed
@@ -553,8 +596,8 @@ def test_cloudinary_accessibility_options() -> None:
         "cl_responsive": {
             "methodology": "modern",
             "placeholder": "blur",
-            "accessibility": "brightmode"
-        }
+            "accessibility": "brightmode",
+        },
     }
     processed = builder.process_html_cloudinary(html, conf)
     assert "/e_brightness_hsb:30/vw/photo.jpg" in processed
@@ -567,8 +610,8 @@ def test_cloudinary_accessibility_options() -> None:
         "cl_responsive": {
             "methodology": "modern",
             "placeholder": "blur",
-            "accessibility": "custom-acc-effect"
-        }
+            "accessibility": "custom-acc-effect",
+        },
     }
     processed = builder.process_html_cloudinary(html, conf)
     assert "/custom-acc-effect/vw/photo.jpg" in processed
@@ -601,25 +644,48 @@ def test_cloudinary_excludes_non_media_assets() -> None:
     """
     conf = {
         "cl_cloud": "testcloud",
-        "cl_map": {
-            "https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"
-        },
-        "cl_trans": "c_limit,w_auto/f_auto,q_auto/"
+        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
+        "cl_trans": "c_limit,w_auto/f_auto,q_auto/",
     }
-    builder = SiteBuilder(BuildPaths(Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path(".")))
+    builder = SiteBuilder(
+        BuildPaths(
+            Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path(".")
+        )
+    )
     processed = builder.process_html_cloudinary(html, conf)
-    
+
     # CSS link, JS script, font woff2, pdf, and zip urls must remain untouched
-    assert 'href="https://cdn.prod.website-files.com/67c7070e70765599c7796390/css/vexy.webflow.css"' in processed
-    assert 'src="https://cdn.prod.website-files.com/67c7070e70765599c7796390/js/webflow.js"' in processed
-    assert 'href="https://cdn.prod.website-files.com/67c7070e70765599c7796390/manifest.json"' in processed
-    assert "url('https://cdn.prod.website-files.com/67c7070e70765599c7796390/fonts/test.woff2')" in processed
+    assert (
+        'href="https://cdn.prod.website-files.com/67c7070e70765599c7796390/css/vexy.webflow.css"'
+        in processed
+    )
+    assert (
+        'src="https://cdn.prod.website-files.com/67c7070e70765599c7796390/js/webflow.js"'
+        in processed
+    )
+    assert (
+        'href="https://cdn.prod.website-files.com/67c7070e70765599c7796390/manifest.json"'
+        in processed
+    )
+    assert (
+        "url('https://cdn.prod.website-files.com/67c7070e70765599c7796390/fonts/test.woff2')"
+        in processed
+    )
     assert 'href="https://cdn.prod.website-files.com/67c7070e70765599c7796390/doc.pdf"' in processed
-    assert 'href="https://cdn.prod.website-files.com/67c7070e70765599c7796390/archive.zip"' in processed
+    assert (
+        'href="https://cdn.prod.website-files.com/67c7070e70765599c7796390/archive.zip"'
+        in processed
+    )
 
     # Images must be replaced
-    assert "url('https://res.cloudinary.com/testcloud/image/upload/c_limit,w_auto/f_auto,q_auto/vw/images/bg.png')" in processed
-    assert 'src="https://res.cloudinary.com/testcloud/image/upload/c_limit,w_auto/f_auto,q_auto/vw/images/photo.jpg"' in processed
+    assert (
+        "url('https://res.cloudinary.com/testcloud/image/upload/c_limit,w_auto/f_auto,q_auto/vw/images/bg.png')"
+        in processed
+    )
+    assert (
+        'src="https://res.cloudinary.com/testcloud/image/upload/c_limit,w_auto/f_auto,q_auto/vw/images/photo.jpg"'
+        in processed
+    )
 
 
 def test_cloudinary_excludes_nested_fetch_urls() -> None:
@@ -633,17 +699,146 @@ def test_cloudinary_excludes_nested_fetch_urls() -> None:
     """
     conf = {
         "cl_cloud": "testcloud",
-        "cl_map": {
-            "https://i.vexy.art": "v"
-        },
-        "cl_trans": "c_limit,w_auto/f_auto,q_auto/"
+        "cl_map": {"https://i.vexy.art": "v"},
+        "cl_trans": "c_limit,w_auto/f_auto,q_auto/",
     }
-    builder = SiteBuilder(BuildPaths(Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path(".")))
+    builder = SiteBuilder(
+        BuildPaths(
+            Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path(".")
+        )
+    )
     processed = builder.process_html_cloudinary(html, conf)
 
     # The nested URL must NOT be touched
-    assert 'poster="https://res.cloudinary.com/testcloud/image/fetch/q_60/f_auto/https://i.vexy.art/vl/websiteart/poster.png"' in processed
+    assert (
+        'poster="https://res.cloudinary.com/testcloud/image/fetch/q_60/f_auto/https://i.vexy.art/vl/websiteart/poster.png"'
+        in processed
+    )
     # The normal image URL must be replaced
-    assert 'src="https://res.cloudinary.com/testcloud/image/upload/c_limit,w_auto/f_auto,q_auto/v/vl/normal.png"' in processed
+    assert (
+        'src="https://res.cloudinary.com/testcloud/image/upload/c_limit,w_auto/f_auto,q_auto/v/vl/normal.png"'
+        in processed
+    )
 
 
+def test_split_google_fonts_links_splits_multi_family() -> None:
+    html = (
+        '<head><link rel="stylesheet" href="https://fonts.googleapis.com/css2'
+        '?family=Crimson+Pro:wght@400&amp;family=EB+Garamond&amp;display=swap">'
+        "</head>"
+    )
+    out = split_google_fonts_links(html)
+    assert out.count("fonts.googleapis.com/css2") == 2
+    assert "family=Crimson+Pro:wght@400" in out
+    assert "family=EB+Garamond" in out
+    # No link retains the multi-family chain.
+    import re
+
+    for link in re.findall(r"css2\?[^\"']*", out):
+        assert link.count("family=") == 1
+        assert "display=swap" in link
+
+
+def test_split_google_fonts_links_handles_two_multi_family_links() -> None:
+    # Regression: bs4 >=4.13 ``decompose`` nulls a tag's ``.attrs`` and can clear
+    # a sibling link still held in the live ResultSet, which crashed the in-loop
+    # ``link["href"]`` read once a second multi-family link was split.
+    html = (
+        "<head>"
+        '<link rel="stylesheet" href="https://fonts.googleapis.com/css2'
+        '?family=Alegreya&amp;family=Outfit&amp;display=swap">'
+        '<link rel="stylesheet" href="/local.css">'
+        '<link rel="stylesheet" href="https://fonts.googleapis.com/css2'
+        '?family=Commissioner&amp;family=Ysabeau&amp;display=swap">'
+        "</head>"
+    )
+    out = split_google_fonts_links(html)
+    import re
+
+    links = re.findall(r"css2\?[^\"']*", out)
+    assert len(links) == 4
+    for link in links:
+        assert link.count("family=") == 1
+    for family in ("Alegreya", "Outfit", "Commissioner", "Ysabeau"):
+        assert f"family={family}" in out
+    assert "/local.css" in out
+
+
+def test_split_google_fonts_links_noop_when_single_family() -> None:
+    html = '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bona+Nova&amp;display=swap">'
+    assert split_google_fonts_links(html) == html
+
+
+def test_split_google_fonts_links_noop_when_no_google_fonts() -> None:
+    html = "<head><link rel=stylesheet href='/style.css'></head>"
+    assert split_google_fonts_links(html) == html
+
+
+def test_split_frontmatter_when_block_present_then_returns_inner_and_body() -> None:
+    text = "---\ntitle: Vexy\nwebflow-import-url: https://x.test/\n---\n\nOld body\n"
+    frontmatter, body = split_frontmatter(text)
+    assert frontmatter == "title: Vexy\nwebflow-import-url: https://x.test/"
+    assert body == "Old body\n"
+
+
+def test_split_frontmatter_when_no_block_then_returns_none_and_text() -> None:
+    text = "# Just a heading\n\nNo frontmatter here.\n"
+    frontmatter, body = split_frontmatter(text)
+    assert frontmatter is None
+    assert body == text
+
+
+def test_split_frontmatter_preserves_comments_and_quoting() -> None:
+    text = '---\n# a comment\ntitle: "Quoted"\n---\nbody\n'
+    frontmatter, _ = split_frontmatter(text)
+    assert frontmatter == '# a comment\ntitle: "Quoted"'
+
+
+def test_update_stub_keeps_frontmatter_and_replaces_body(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stub = tmp_path / "src_docs/md/lines/index.md"
+    stub.parent.mkdir(parents=True)
+    stub.write_text(
+        "---\ntitle: Vexy Lines\nwebflow-import-url: https://x.test/lines\n---\n\nPlaceholder body.\n",
+        encoding="utf-8",
+    )
+    cache = tmp_path / "wf_cache/lines/index.html"
+    cache.parent.mkdir(parents=True)
+    cache.write_text("<html><body><h1>Lines</h1></body></html>", encoding="utf-8")
+
+    page = WebflowPage(
+        markdown_path=stub,
+        public_path="/lines/",
+        import_url="https://x.test/lines",
+        cache_path=cache,
+    )
+    builder = SiteBuilder(BuildPaths.from_root(tmp_path))
+    monkeypatch.setattr(
+        "fontlab_www_toolkit.builder.extract_markdown_via_url22md",
+        lambda *a, **k: "# Lines\n\nExtracted from cache.",
+    )
+    builder.update_stub(page)
+
+    result = stub.read_text(encoding="utf-8")
+    assert result.startswith(
+        "---\ntitle: Vexy Lines\nwebflow-import-url: https://x.test/lines\n---\n\n"
+    )
+    assert "Extracted from cache." in result
+    assert "Placeholder body." not in result
+
+
+@pytest.mark.skipif(shutil.which("url22md") is None, reason="url22md not installed")
+def test_extract_markdown_via_url22md_when_real_binary_then_returns_markdown(
+    tmp_path: Path,
+) -> None:
+    cache = tmp_path / "index.html"
+    cache.write_text(
+        "<html><head><title>Doc</title></head><body><article>"
+        "<h1>Hello</h1><p>This is a reasonably long paragraph of prose so that "
+        "the readability extractor recognises it as the main article body.</p>"
+        "</article></body></html>",
+        encoding="utf-8",
+    )
+    markdown = extract_markdown_via_url22md(cache, tool=3, timeout=30)
+    assert "Hello" in markdown
