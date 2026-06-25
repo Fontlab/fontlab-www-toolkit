@@ -8,6 +8,7 @@ import shutil
 from pathlib import Path
 
 import pytest
+from bs4 import BeautifulSoup
 
 from fontlab_www_toolkit.builder import (
     BuildPaths,
@@ -276,6 +277,78 @@ def test_cloudinary_url_mapping_and_replacement() -> None:
 
     # anchor tag href with non-media (pdf) should remain untouched
     assert 'href="https://i.fontlab.com/doc.pdf"' in processed
+
+
+def _cloudinary_builder() -> SiteBuilder:
+    return SiteBuilder(
+        BuildPaths(
+            root=Path("."), src_docs=Path("."), markdown=Path("."), static_docs=Path("."),
+            webflow_cache=Path("."), build_docs=Path("."), public=Path("."),
+            old_pages_config=Path("."),
+        )
+    )
+
+
+def test_cloudinary_svg_uses_simple_static_url() -> None:
+    html = (
+        '<html><body>'
+        '<img id="svg" src="https://cdn.prod.website-files.com/67c7070e70765599c7796390/x.svg">'
+        '<img id="png" src="https://cdn.prod.website-files.com/67c7070e70765599c7796390/y.png">'
+        '<div style="background-image:url(https://cdn.prod.website-files.com/67c7070e70765599c7796390/bg.svg)"></div>'
+        '</body></html>'
+    )
+    conf = {
+        "cl_cloud": "fontlab",
+        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
+        "cl_trans": "c_limit,w_auto/f_auto,q_auto,dpr_auto/",
+        "cl_responsive": {"methodology": "modern", "placeholder": "blur"},
+    }
+    out = _cloudinary_builder().process_html_cloudinary(html, conf)
+    soup = BeautifulSoup(out, "html.parser")
+
+    svg = soup.find(id="svg")
+    # SVG: simple f_svg,q_auto URL, no responsive class/script participation.
+    assert svg["src"] == (
+        "https://res.cloudinary.com/fontlab/image/upload/f_svg,q_auto/vw/x.svg"
+    )
+    assert svg.get("class") is None
+    assert svg.get("data-src") is None
+
+    # Raster image keeps the full responsive treatment.
+    png = soup.find(id="png")
+    assert "cld-responsive" in (png.get("class") or [])
+    assert "w_auto" in png["data-src"]
+
+    # SVG referenced from CSS is simplified too.
+    assert (
+        "url(https://res.cloudinary.com/fontlab/image/upload/f_svg,q_auto/vw/bg.svg)"
+        in out
+    )
+
+
+def test_cloudinary_opt_out_attribute_skips_responsive() -> None:
+    html = (
+        '<html><body>'
+        '<img id="out" data-cld-responsive="false" '
+        'src="https://cdn.prod.website-files.com/67c7070e70765599c7796390/logo.png">'
+        '</body></html>'
+    )
+    conf = {
+        "cl_cloud": "fontlab",
+        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
+        "cl_trans": "c_limit,w_auto/f_auto,q_auto,dpr_auto/",
+        "cl_trans_static": "f_auto,q_auto",
+        "cl_responsive": {"methodology": "modern"},
+    }
+    out = _cloudinary_builder().process_html_cloudinary(html, conf)
+    img = BeautifulSoup(out, "html.parser").find(id="out")
+    # Opted-out image: static URL (no w_auto), no responsive class, no data-src.
+    assert img["src"] == (
+        "https://res.cloudinary.com/fontlab/image/upload/f_auto,q_auto/vw/logo.png"
+    )
+    assert img.get("class") is None
+    assert img.get("data-src") is None
+    assert "w_auto" not in img["src"]
 
 
 def test_cloudinary_responsive_legacy_methodology() -> None:

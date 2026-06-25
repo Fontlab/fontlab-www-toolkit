@@ -191,6 +191,14 @@ class SiteBuilder:
 
         cl_trans = cloudinary_conf.get("cl_trans", "c_limit,w_auto/f_auto,q_auto,dpr_auto/")
 
+        # SVG images skip the responsive width chain entirely — vector art has no
+        # pixel width to optimise, so `w_auto`/`dpr_auto` are meaningless. They get
+        # a minimal `f_svg,q_auto` transform instead. `cl_trans_static` is the
+        # non-responsive fallback used for images the author opts out of the
+        # responsive script (see ``data-cld-responsive="false"`` below).
+        cl_trans_svg = cloudinary_conf.get("cl_trans_svg", "f_svg,q_auto")
+        cl_trans_static = cloudinary_conf.get("cl_trans_static", "f_auto,q_auto")
+
         cl_responsive = cloudinary_conf.get("cl_responsive")
         cl_responsive_enabled = bool(cl_responsive)
         if cl_responsive_enabled and not isinstance(cl_responsive, dict):
@@ -294,43 +302,59 @@ class SiteBuilder:
                         break
 
                 if matched_prefix:
-                    if cl_responsive_enabled:
-                        # Clear srcset to avoid conflict
+                    # SVGs, images opted out via data-cld-responsive="false", and
+                    # all images when responsive mode is off get a plain static
+                    # URL and stay out of the responsive class/script: the script
+                    # only ever touches img.cld-responsive, so omitting the class
+                    # is the compliant way to exclude an image.
+                    is_svg = is_svg_url(src_val)
+                    opt_out = (
+                        str(tag.get("data-cld-responsive", "")).strip().lower() == "false"
+                    )
+                    if is_svg or opt_out or not cl_responsive_enabled:
+                        static_trans = (
+                            cl_trans_svg
+                            if is_svg
+                            else cl_trans_static
+                            if opt_out
+                            else effective_cl_trans
+                        )
+                        tag["src"] = map_cloudinary_url(
+                            src_val, cl_cloud, cl_map, static_trans, svg_trans=cl_trans_svg
+                        )
                         if tag.get("srcset"):
                             del tag["srcset"]
-                        # Add class cld-responsive
-                        classes = tag.get("class", [])
-                        if isinstance(classes, str):
-                            classes = classes.split()
-                        if "cld-responsive" not in classes:
-                            classes.append("cld-responsive")
-                        tag["class"] = " ".join(classes)
-
-                        # Set data-src and src
-                        tag["data-src"] = map_cloudinary_url(
-                            src_val, cl_cloud, cl_map, effective_cl_trans
-                        )
-                        if use_blank_placeholder:
-                            tag["src"] = (
-                                "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
-                            )
-                        else:
-                            tag["src"] = map_cloudinary_url(
-                                src_val, cl_cloud, cl_map, effective_placeholder_trans
-                            )
-
                         if effective_lazyload in ("true", "native", "observer"):
                             tag["loading"] = "lazy"
                         continue
+
+                    # Clear srcset to avoid conflict
+                    if tag.get("srcset"):
+                        del tag["srcset"]
+                    # Add class cld-responsive
+                    classes = tag.get("class", [])
+                    if isinstance(classes, str):
+                        classes = classes.split()
+                    if "cld-responsive" not in classes:
+                        classes.append("cld-responsive")
+                    tag["class"] = " ".join(classes)
+
+                    # Set data-src and src
+                    tag["data-src"] = map_cloudinary_url(
+                        src_val, cl_cloud, cl_map, effective_cl_trans
+                    )
+                    if use_blank_placeholder:
+                        tag["src"] = (
+                            "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+                        )
                     else:
                         tag["src"] = map_cloudinary_url(
-                            src_val, cl_cloud, cl_map, effective_cl_trans
+                            src_val, cl_cloud, cl_map, effective_placeholder_trans
                         )
-                        if tag.get("srcset"):
-                            del tag["srcset"]
-                        if effective_lazyload in ("true", "native"):
-                            tag["loading"] = "lazy"
-                        continue
+
+                    if effective_lazyload in ("true", "native", "observer"):
+                        tag["loading"] = "lazy"
+                    continue
 
             # 2. For all tags (including img if not already processed above),
             # process all attributes to map any matching URLs
@@ -343,7 +367,8 @@ class SiteBuilder:
                     for prefix, map_val in cl_map.items():
                         if prefix in new_val:
                             new_val = replace_urls_in_text(
-                                new_val, prefix, map_val, cl_cloud, effective_cl_trans
+                                new_val, prefix, map_val, cl_cloud, effective_cl_trans,
+                                svg_trans=cl_trans_svg,
                             )
                     tag[attr] = new_val
 
@@ -353,7 +378,8 @@ class SiteBuilder:
                 for prefix, map_val in cl_map.items():
                     if prefix in new_css:
                         new_css = replace_urls_in_text(
-                            new_css, prefix, map_val, cl_cloud, effective_cl_trans
+                            new_css, prefix, map_val, cl_cloud, effective_cl_trans,
+                            svg_trans=cl_trans_svg,
                         )
                 tag.string = new_css
 
@@ -799,20 +825,39 @@ def is_image_or_allowed_media(url: str) -> bool:
     return any(path.endswith(ext) for ext in allowed_extensions)
 
 
-def map_cloudinary_url(url: str, cl_cloud: str, cl_map: dict[str, str], cl_trans: str) -> str:
+def is_svg_url(url: str) -> bool:
+    """True if ``url``'s path (ignoring query/fragment) ends in ``.svg``."""
+    path = url.split("?", 1)[0].split("#", 1)[0]
+    return path.lower().endswith(".svg")
+
+
+def map_cloudinary_url(
+    url: str,
+    cl_cloud: str,
+    cl_map: dict[str, str],
+    cl_trans: str,
+    svg_trans: str | None = None,
+) -> str:
     for prefix, map_val in cl_map.items():
         if url.startswith(prefix):
             if not is_image_or_allowed_media(url):
                 return url
             rest = url[len(prefix) :].lstrip("/")
-            trans = cl_trans
+            trans = svg_trans if (svg_trans and is_svg_url(url)) else cl_trans
             if trans and not trans.endswith("/"):
                 trans += "/"
             return f"https://res.cloudinary.com/{cl_cloud}/image/upload/{trans}{map_val}/{rest}"
     return url
 
 
-def replace_urls_in_text(text: str, prefix: str, map_val: str, cl_cloud: str, cl_trans: str) -> str:
+def replace_urls_in_text(
+    text: str,
+    prefix: str,
+    map_val: str,
+    cl_cloud: str,
+    cl_trans: str,
+    svg_trans: str | None = None,
+) -> str:
     escaped_prefix = re.escape(prefix)
     pattern = re.compile(escaped_prefix + r"[^\s\"'\)\>]*")
 
@@ -830,7 +875,7 @@ def replace_urls_in_text(text: str, prefix: str, map_val: str, cl_cloud: str, cl
         if not is_image_or_allowed_media(url):
             return url
         rest = url[len(prefix) :].lstrip("/")
-        trans = cl_trans
+        trans = svg_trans if (svg_trans and is_svg_url(url)) else cl_trans
         if trans and not trans.endswith("/"):
             trans += "/"
         return f"https://res.cloudinary.com/{cl_cloud}/image/upload/{trans}{map_val}/{rest}"
