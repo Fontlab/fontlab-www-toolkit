@@ -84,7 +84,11 @@ def rsync_remote(target: DeployTarget) -> None:
     rsync = shutil.which("rsync")
     if rsync is None:
         raise SystemExit("rsync is required for remote deploy.")
-    cmd = [rsync, "-az"]
+    # ``--info=progress2`` shows a single live overall-progress line (percent,
+    # transfer rate, ETA); ``-h`` makes sizes human-readable. ``--info=name0``
+    # silences the per-file name spam so the progress line stays readable.
+    # Without these the transfer is silent and looks hung on large trees.
+    cmd = [rsync, "-az", "-h", "--info=progress2,name0"]
     if target.rsync_delete:
         cmd.append("--delete")
     for ex in target.rsync_excludes:
