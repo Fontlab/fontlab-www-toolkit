@@ -181,6 +181,16 @@ class SiteBuilder:
         if cloudinary_conf:
             html = self.process_html_cloudinary(html, cloudinary_conf)
 
+        # 6. Opt every executable <script> out of Cloudflare Rocket Loader.
+        #    Rocket Loader (enabled on the deployed zone) rewrites script types
+        #    to defer/reorder execution and cannot run ES modules, which breaks
+        #    scroll interactions and module web components on the live site even
+        #    though the no-Cloudflare staging host runs the same HTML fine.
+        #    data-cfasync="false" restores native, in-order execution. Harmless
+        #    no-op where Rocket Loader is disabled.
+        if effective_config.get("rocket_loader_optout", True):
+            html = exempt_scripts_from_rocket_loader(html)
+
         return html
 
     def process_html_cloudinary(self, html: str, cloudinary_conf: dict) -> str:
@@ -308,9 +318,7 @@ class SiteBuilder:
                     # only ever touches img.cld-responsive, so omitting the class
                     # is the compliant way to exclude an image.
                     is_svg = is_svg_url(src_val)
-                    opt_out = (
-                        str(tag.get("data-cld-responsive", "")).strip().lower() == "false"
-                    )
+                    opt_out = str(tag.get("data-cld-responsive", "")).strip().lower() == "false"
                     if is_svg or opt_out or not cl_responsive_enabled:
                         static_trans = (
                             cl_trans_svg
@@ -367,7 +375,11 @@ class SiteBuilder:
                     for prefix, map_val in cl_map.items():
                         if prefix in new_val:
                             new_val = replace_urls_in_text(
-                                new_val, prefix, map_val, cl_cloud, effective_cl_trans,
+                                new_val,
+                                prefix,
+                                map_val,
+                                cl_cloud,
+                                effective_cl_trans,
                                 svg_trans=cl_trans_svg,
                             )
                     tag[attr] = new_val
@@ -378,7 +390,11 @@ class SiteBuilder:
                 for prefix, map_val in cl_map.items():
                     if prefix in new_css:
                         new_css = replace_urls_in_text(
-                            new_css, prefix, map_val, cl_cloud, effective_cl_trans,
+                            new_css,
+                            prefix,
+                            map_val,
+                            cl_cloud,
+                            effective_cl_trans,
                             svg_trans=cl_trans_svg,
                         )
                 tag.string = new_css
@@ -957,6 +973,55 @@ def split_google_fonts_links(html: str) -> str:
             link.insert_before(new)
         link.decompose()
     return str(soup) if targets else html
+
+
+# Script ``type`` values Cloudflare Rocket Loader rewrites to defer/reorder
+# execution (an empty string == no ``type`` attribute, i.e. a classic script).
+# Data scripts (application/json, ld+json, import maps, …) are ignored by Rocket
+# Loader, so they are intentionally absent here and left untouched.
+ROCKET_LOADER_SCRIPT_TYPES: frozenset[str] = frozenset(
+    {
+        "",
+        "text/javascript",
+        "application/javascript",
+        "text/ecmascript",
+        "application/ecmascript",
+        "module",
+    }
+)
+
+
+def exempt_scripts_from_rocket_loader(html: str) -> str:
+    """Add ``data-cfasync="false"`` to every executable ``<script>`` tag.
+
+    Cloudflare Rocket Loader (a zone-level optimisation enabled on the deployed
+    host) rewrites each executable script's ``type`` to a private token so it
+    can defer and reorder execution. It cannot run ES modules and changes the
+    order of classic scripts, which breaks scroll-driven interactions and module
+    web components on the live site — while the staging webflow.io host, with no
+    Cloudflare in front, runs the identical HTML correctly. The documented
+    opt-out is ``data-cfasync="false"``: Rocket Loader leaves such scripts alone
+    and the browser executes them natively, in document order (the staging
+    behaviour).
+
+    Only scripts Rocket Loader would otherwise mangle are touched — inline or
+    external JavaScript and ``type="module"``. Data blocks (JSON, LD+JSON,
+    import maps, …) are left unchanged. Idempotent: a script that already
+    carries ``data-cfasync`` is skipped. Returns the input string unchanged when
+    nothing needs adding, avoiding a needless re-serialisation.
+    """
+    if "<script" not in html:
+        return html
+    soup = BeautifulSoup(html, "html.parser")
+    changed = False
+    for tag in soup.find_all("script"):
+        if tag.has_attr("data-cfasync"):
+            continue
+        if (tag.get("type") or "").strip().lower() not in ROCKET_LOADER_SCRIPT_TYPES:
+            continue
+        tag["data-cfasync"] = "false"
+        changed = True
+    return str(soup) if changed else html
 
 
 def strip_extraction_noise(html: str) -> str:

@@ -16,6 +16,7 @@ from fontlab_www_toolkit.builder import (
     WebflowPage,
     clean_webflow_html,
     convert_old_html,
+    exempt_scripts_from_rocket_loader,
     extract_markdown_via_url22md,
     extract_old_page_content,
     find_uv,
@@ -282,8 +283,13 @@ def test_cloudinary_url_mapping_and_replacement() -> None:
 def _cloudinary_builder() -> SiteBuilder:
     return SiteBuilder(
         BuildPaths(
-            root=Path("."), src_docs=Path("."), markdown=Path("."), static_docs=Path("."),
-            webflow_cache=Path("."), build_docs=Path("."), public=Path("."),
+            root=Path("."),
+            src_docs=Path("."),
+            markdown=Path("."),
+            static_docs=Path("."),
+            webflow_cache=Path("."),
+            build_docs=Path("."),
+            public=Path("."),
             old_pages_config=Path("."),
         )
     )
@@ -291,11 +297,11 @@ def _cloudinary_builder() -> SiteBuilder:
 
 def test_cloudinary_svg_uses_simple_static_url() -> None:
     html = (
-        '<html><body>'
+        "<html><body>"
         '<img id="svg" src="https://cdn.prod.website-files.com/67c7070e70765599c7796390/x.svg">'
         '<img id="png" src="https://cdn.prod.website-files.com/67c7070e70765599c7796390/y.png">'
         '<div style="background-image:url(https://cdn.prod.website-files.com/67c7070e70765599c7796390/bg.svg)"></div>'
-        '</body></html>'
+        "</body></html>"
     )
     conf = {
         "cl_cloud": "fontlab",
@@ -308,9 +314,7 @@ def test_cloudinary_svg_uses_simple_static_url() -> None:
 
     svg = soup.find(id="svg")
     # SVG: simple f_svg,q_auto URL, no responsive class/script participation.
-    assert svg["src"] == (
-        "https://res.cloudinary.com/fontlab/image/upload/f_svg,q_auto/vw/x.svg"
-    )
+    assert svg["src"] == ("https://res.cloudinary.com/fontlab/image/upload/f_svg,q_auto/vw/x.svg")
     assert svg.get("class") is None
     assert svg.get("data-src") is None
 
@@ -320,18 +324,15 @@ def test_cloudinary_svg_uses_simple_static_url() -> None:
     assert "w_auto" in png["data-src"]
 
     # SVG referenced from CSS is simplified too.
-    assert (
-        "url(https://res.cloudinary.com/fontlab/image/upload/f_svg,q_auto/vw/bg.svg)"
-        in out
-    )
+    assert "url(https://res.cloudinary.com/fontlab/image/upload/f_svg,q_auto/vw/bg.svg)" in out
 
 
 def test_cloudinary_opt_out_attribute_skips_responsive() -> None:
     html = (
-        '<html><body>'
+        "<html><body>"
         '<img id="out" data-cld-responsive="false" '
         'src="https://cdn.prod.website-files.com/67c7070e70765599c7796390/logo.png">'
-        '</body></html>'
+        "</body></html>"
     )
     conf = {
         "cl_cloud": "fontlab",
@@ -915,3 +916,107 @@ def test_extract_markdown_via_url22md_when_real_binary_then_returns_markdown(
     )
     markdown = extract_markdown_via_url22md(cache, tool=3, timeout=30)
     assert "Hello" in markdown
+
+
+# ---------------------------------------------------------------------------
+# exempt_scripts_from_rocket_loader unit tests
+# ---------------------------------------------------------------------------
+
+
+def _make_builder() -> SiteBuilder:
+    """Minimal SiteBuilder with no config (no cloudinary, etc.)."""
+    paths = BuildPaths(
+        root=Path("."),
+        src_docs=Path("."),
+        markdown=Path("."),
+        static_docs=Path("."),
+        webflow_cache=Path("."),
+        build_docs=Path("."),
+        public=Path("."),
+        old_pages_config=Path("."),
+    )
+    return SiteBuilder(paths)
+
+
+def test_exempt_scripts_classic_inline_gets_cfasync() -> None:
+    html = "<script>console.log('x')</script>"
+    out = exempt_scripts_from_rocket_loader(html)
+    assert 'data-cfasync="false"' in out
+
+
+def test_exempt_scripts_module_gets_cfasync() -> None:
+    html = '<script type="module" src="/a.js"></script>'
+    out = exempt_scripts_from_rocket_loader(html)
+    assert 'data-cfasync="false"' in out
+
+
+def test_exempt_scripts_text_javascript_gets_cfasync() -> None:
+    html = '<script type="text/javascript" src="/a.js"></script>'
+    out = exempt_scripts_from_rocket_loader(html)
+    assert 'data-cfasync="false"' in out
+
+
+def test_exempt_scripts_application_json_untouched() -> None:
+    html = '<script type="application/json">{"a":1}</script>'
+    out = exempt_scripts_from_rocket_loader(html)
+    assert "data-cfasync" not in out
+
+
+def test_exempt_scripts_ld_json_untouched() -> None:
+    html = '<script type="application/ld+json">{}</script>'
+    out = exempt_scripts_from_rocket_loader(html)
+    assert "data-cfasync" not in out
+
+
+def test_exempt_scripts_idempotent_when_already_has_attr() -> None:
+    html = '<script data-cfasync="false" src="/a.js"></script>'
+    out = exempt_scripts_from_rocket_loader(html)
+    assert out.count("data-cfasync") == 1
+
+
+def test_exempt_scripts_no_scripts_returns_same_object() -> None:
+    h = "<p>hi</p>"
+    assert exempt_scripts_from_rocket_loader(h) is h
+
+
+def test_exempt_scripts_mixed_counts_correctly() -> None:
+    html = (
+        "<script>a()</script>"
+        '<script type="module">b()</script>'
+        '<script type="application/json">{}</script>'
+    )
+    out = exempt_scripts_from_rocket_loader(html)
+    assert out.count('data-cfasync="false"') == 2
+
+
+# ---------------------------------------------------------------------------
+# Integration tests through SiteBuilder.process_page_html
+# ---------------------------------------------------------------------------
+
+
+def test_process_page_html_rocket_loader_default_on() -> None:
+    """Default config (rocket_loader_optout not set) must inject data-cfasync."""
+    builder = _make_builder()
+    html = '<html><head></head><body><script type="module">x()</script></body></html>'
+    out = builder.process_page_html(html)
+    assert 'data-cfasync="false"' in out
+
+
+def test_process_page_html_rocket_loader_optout_false_skips_injection() -> None:
+    """rocket_loader_optout=False must leave scripts untouched."""
+    paths = BuildPaths(
+        root=Path("."),
+        src_docs=Path("."),
+        markdown=Path("."),
+        static_docs=Path("."),
+        webflow_cache=Path("."),
+        build_docs=Path("."),
+        public=Path("."),
+        old_pages_config=Path("."),
+    )
+    builder = SiteBuilder(paths)
+    # Inject config directly (no file path needed for this test)
+    builder.config = {"rocket_loader_optout": False}
+    html = '<html><head></head><body><script type="module">x()</script></body></html>'
+    out = builder.process_page_html(html)
+    assert "data-cfasync" not in out
