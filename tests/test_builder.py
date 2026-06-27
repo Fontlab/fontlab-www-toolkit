@@ -423,6 +423,30 @@ def test_cloudinary_responsive_modern_methodology() -> None:
     assert "cloudinary-core" not in processed
 
 
+def test_responsive_script_does_not_clobber_opacity() -> None:
+    """The responsive load-in fade must use ``filter`` (blur) only and never set
+    inline ``opacity``: an inline opacity would override class/CSS-driven opacity
+    animations (e.g. scroll-driven layer reveals that toggle ``opacity:0/1`` per
+    step), forcing every responsive image permanently visible."""
+    html = (
+        "<html><body>"
+        '<img src="https://cdn.prod.website-files.com/67c7070e70765599c7796390/photo.jpg" />'
+        "</body></html>"
+    )
+    cl_map = {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"}
+    for lazyload in ("observer", "native"):
+        conf = {
+            "cl_cloud": "testcloud",
+            "cl_map": cl_map,
+            "cl_responsive": {"methodology": "modern", "lazyload": lazyload},
+        }
+        processed = _cloudinary_builder().process_html_cloudinary(html, conf)
+        assert "style.opacity" not in processed, lazyload
+        assert "opacity 0.4s" not in processed, lazyload
+        # the blur-based load-in effect is retained
+        assert "blur(4px)" in processed, lazyload
+
+
 def test_configurable_settings_overrides(tmp_path: Path) -> None:
     # Test frontmatter key and old pages config path overrides
     config_file = tmp_path / "config.json"

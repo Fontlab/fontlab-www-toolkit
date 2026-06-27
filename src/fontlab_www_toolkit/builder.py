@@ -430,6 +430,11 @@ class SiteBuilder:
                         custom_script.string = f"\n{custom_js}\n"
                         body.append(custom_script)
                 else:
+                    # The load-in effect fades via ``filter`` (blur) ONLY and must not
+                    # touch ``opacity``: writing inline ``style.opacity`` overrides any
+                    # class/CSS-driven opacity animation on the image (e.g. scroll-driven
+                    # layer reveals that toggle ``opacity:0/1`` per step), forcing every
+                    # such image permanently visible. Blur alone gives the same fade-in.
                     modern_script = soup.new_tag("script", type="text/javascript")
                     if effective_lazyload == "observer":
                         modern_script.string = (
@@ -446,12 +451,10 @@ class SiteBuilder:
                             "          if (dataSrc) {\n"
                             "            const newSrc = dataSrc.replace('w_auto', 'w_' + targetWidth);\n"
                             "            if (img.getAttribute('src') !== newSrc) {\n"
-                            "              img.style.transition = 'filter 0.4s ease-in-out, opacity 0.4s ease-in-out';\n"
+                            "              img.style.transition = 'filter 0.4s ease-in-out';\n"
                             "              img.style.filter = 'blur(4px)';\n"
-                            "              img.style.opacity = '0.8';\n"
                             "              const handleLoad = () => {\n"
                             "                img.style.filter = 'none';\n"
-                            "                img.style.opacity = '1';\n"
                             "                img.removeEventListener('load', handleLoad);\n"
                             "              };\n"
                             "              img.addEventListener('load', handleLoad);\n"
@@ -499,12 +502,10 @@ class SiteBuilder:
                             "          if (dataSrc) {\n"
                             "            const newSrc = dataSrc.replace('w_auto', 'w_' + targetWidth);\n"
                             "            if (img.getAttribute('src') !== newSrc) {\n"
-                            "              img.style.transition = 'filter 0.4s ease-in-out, opacity 0.4s ease-in-out';\n"
+                            "              img.style.transition = 'filter 0.4s ease-in-out';\n"
                             "              img.style.filter = 'blur(4px)';\n"
-                            "              img.style.opacity = '0.8';\n"
                             "              const handleLoad = () => {\n"
                             "                img.style.filter = 'none';\n"
-                            "                img.style.opacity = '1';\n"
                             "                img.removeEventListener('load', handleLoad);\n"
                             "              };\n"
                             "              img.addEventListener('load', handleLoad);\n"
