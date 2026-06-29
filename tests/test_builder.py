@@ -1,4 +1,9 @@
-"""Tests for the shared FontLab site builder."""
+"""Core tests for the shared FontLab site builder.
+
+HTML-manipulation tests live in ``test_html_processing.py``.
+Cloudinary tests live in ``test_cloudinary.py``.
+markdownify fixture tests live in ``test_markdownify.py``.
+"""
 
 # this_file: tests/test_builder.py
 
@@ -8,19 +13,15 @@ import shutil
 from pathlib import Path
 
 import pytest
-from bs4 import BeautifulSoup
 
 from fontlab_www_toolkit.builder import (
     BuildPaths,
     SiteBuilder,
     WebflowPage,
-    clean_webflow_html,
     convert_old_html,
-    exempt_scripts_from_rocket_loader,
     extract_markdown_via_url22md,
     extract_old_page_content,
     find_uv,
-    inject_badge_hiding_css,
     markdown_to_public_path,
     overlay_directory,
     parse_flat_yaml,
@@ -28,17 +29,11 @@ from fontlab_www_toolkit.builder import (
     remove_html_blocks,
     replace_directory,
     split_frontmatter,
-    split_google_fonts_links,
-    strip_webflow_badge,
 )
 
-BADGE_HTML = (
-    '<a class="w-webflow-badge" href="https://webflow.com?utm_campaign=brandjs">'
-    '<img src="https://d3e54v103j8qbb.cloudfront.net/img/webflow-badge-icon-d2.89e12c322e.svg" '
-    'alt="" style="margin-right: 4px; width: 26px;">'
-    '<img src="https://d3e54v103j8qbb.cloudfront.net/img/webflow-badge-text-d2.c82cec3b78.svg" '
-    'alt="Made in Webflow"></a>'
-)
+# ---------------------------------------------------------------------------
+# Frontmatter + path helpers
+# ---------------------------------------------------------------------------
 
 
 def test_parse_frontmatter_when_webflow_url_present_then_returns_value() -> None:
@@ -58,19 +53,29 @@ def test_markdown_to_public_path_when_index_then_drops_index() -> None:
     assert markdown_to_public_path(root / "lines/index.md", root) == "/lines/"
 
 
-def test_discover_webflow_pages_when_placeholder_exists_then_cache_path_matches(
-    tmp_path: Path,
-) -> None:
-    markdown = tmp_path / "src_docs/md/font-converter"
-    markdown.mkdir(parents=True)
-    (markdown / "transtype.md").write_text(
-        "---\ntitle: TransType\nwebflow-import-url: https://example.test/transtype\n---\n# T\n",
-        encoding="utf-8",
-    )
-    paths = BuildPaths.from_root(tmp_path)
-    pages = SiteBuilder(paths).discover_webflow_pages()
-    assert len(pages) == 1
-    assert pages[0].cache_path == tmp_path / "wf_cache/font-converter/transtype/index.html"
+def test_split_frontmatter_when_block_present_then_returns_inner_and_body() -> None:
+    text = "---\ntitle: Vexy\nwebflow-import-url: https://x.test/\n---\n\nOld body\n"
+    frontmatter, body = split_frontmatter(text)
+    assert frontmatter == "title: Vexy\nwebflow-import-url: https://x.test/"
+    assert body == "Old body\n"
+
+
+def test_split_frontmatter_when_no_block_then_returns_none_and_text() -> None:
+    text = "# Just a heading\n\nNo frontmatter here.\n"
+    frontmatter, body = split_frontmatter(text)
+    assert frontmatter is None
+    assert body == text
+
+
+def test_split_frontmatter_preserves_comments_and_quoting() -> None:
+    text = '---\n# a comment\ntitle: "Quoted"\n---\nbody\n'
+    frontmatter, _ = split_frontmatter(text)
+    assert frontmatter == '# a comment\ntitle: "Quoted"'
+
+
+# ---------------------------------------------------------------------------
+# YAML + mapping helpers
+# ---------------------------------------------------------------------------
 
 
 def test_parse_flat_yaml_when_old_pages_config_then_returns_mapping() -> None:
@@ -86,18 +91,9 @@ def test_parse_flat_yaml_when_old_pages_config_then_returns_mapping() -> None:
     assert result["terms.md"] == "terms/index.html"
 
 
-def test_load_old_pages_when_config_present_then_resolves_paths(tmp_path: Path) -> None:
-    src = tmp_path / "src_docs"
-    src.mkdir()
-    (src / "old-pages.yml").write_text(
-        "old_public: legacy/public\npages:\n  cookies.md: cookies/index.html\n",
-        encoding="utf-8",
-    )
-    paths = BuildPaths.from_root(tmp_path)
-    mapping = SiteBuilder(paths).load_old_pages()
-    assert mapping is not None
-    assert mapping.old_public == (tmp_path / "legacy/public").resolve()
-    assert mapping.pages == {"cookies.md": "cookies/index.html"}
+# ---------------------------------------------------------------------------
+# HTML helpers
+# ---------------------------------------------------------------------------
 
 
 def test_extract_old_page_content_when_main_tag_then_returns_main() -> None:
@@ -108,6 +104,11 @@ def test_extract_old_page_content_when_main_tag_then_returns_main() -> None:
 def test_remove_html_blocks_when_script_present_then_strips_it() -> None:
     html = "<p>keep</p><script>bad()</script><p>also</p>"
     assert "<script>" not in remove_html_blocks(html, ["script"])
+
+
+# ---------------------------------------------------------------------------
+# File operations
+# ---------------------------------------------------------------------------
 
 
 def test_overlay_and_replace_directory(tmp_path: Path) -> None:
@@ -136,760 +137,47 @@ def test_convert_old_html_when_real_page_then_returns_markdown(tmp_path: Path) -
     assert "Para" in out
 
 
+# ---------------------------------------------------------------------------
+# Utilities
+# ---------------------------------------------------------------------------
+
+
 def test_find_uv_when_called_then_returns_string() -> None:
     assert isinstance(find_uv(), str)
 
 
-def test_strip_webflow_badge_when_badge_present_then_removes_anchor() -> None:
-    html = f"<body><p>keep</p>{BADGE_HTML}</body>"
-    cleaned = strip_webflow_badge(html)
-    assert "w-webflow-badge" not in cleaned
-    assert "<p>keep</p>" in cleaned
+# ---------------------------------------------------------------------------
+# Webflow page discovery
+# ---------------------------------------------------------------------------
 
 
-def test_inject_badge_hiding_css_when_head_present_then_inserts_once() -> None:
-    html = "<html><head><title>x</title></head><body></body></html>"
-    once = inject_badge_hiding_css(html)
-    assert ".w-webflow-badge{display:none !important;}" in once
-    assert once.lower().index("<style>") < once.lower().index("</head>")
-    # Idempotent: a second pass must not duplicate the rule.
-    assert inject_badge_hiding_css(once) == once
-
-
-def test_inject_badge_hiding_css_when_no_head_then_prepends() -> None:
-    html = "<div>only body</div>"
-    assert inject_badge_hiding_css(html).startswith("<style>")
-
-
-def test_clean_webflow_html_applies_both_approaches() -> None:
-    html = f"<html><head></head><body>{BADGE_HTML}</body></html>"
-    cleaned = clean_webflow_html(html)
-    assert "w-webflow-badge" not in cleaned.replace(
-        ".w-webflow-badge{display:none !important;}", ""
-    )
-    assert ".w-webflow-badge{display:none !important;}" in cleaned
-
-
-def test_config_loading_from_file_and_root(tmp_path: Path) -> None:
-    # 1. Test explicit config path loading
-    config_file = tmp_path / "custom-config.json"
-    config_file.write_text('{"user_agent": "custom_agent"}', encoding="utf-8")
-    paths = BuildPaths.from_root(tmp_path)
-
-    builder = SiteBuilder(paths, config_path=config_file)
-    assert builder.config == {"user_agent": "custom_agent"}
-
-    # 2. Test default config from root
-    root_config = tmp_path / "fontlab-www-toolkit.json"
-    root_config.write_text('{"user_agent": "root_agent"}', encoding="utf-8")
-
-    builder_default = SiteBuilder(paths)
-    assert builder_default.config == {"user_agent": "root_agent"}
-
-
-def test_page_specific_config_parsing_from_html() -> None:
-    html = """
-    <html>
-      <head>
-        <script id="fontlab-toolkit-config" type="application/json">
-        {
-          "cloudinary": {
-            "cl_cloud": "custom_cloud",
-            "cl_map": {
-              "https://example.com": "ex"
-            },
-            "cl_responsive": {
-              "methodology": "legacy"
-            }
-          }
-        }
-        </script>
-      </head>
-      <body></body>
-    </html>
-    """
-    paths = BuildPaths(
-        root=Path("."),
-        src_docs=Path("."),
-        markdown=Path("."),
-        static_docs=Path("."),
-        webflow_cache=Path("."),
-        build_docs=Path("."),
-        public=Path("."),
-        old_pages_config=Path("."),
-    )
-    builder = SiteBuilder(paths)
-    processed = builder.process_page_html(html)
-    # The processed html should contain the legacy script tags since methodology was overridden to legacy in the page config
-    assert "cloudinary-core" in processed
-    assert "cloudinary.Cloudinary.new({cloud_name: 'custom_cloud'});" in processed
-
-
-def test_cloudinary_url_mapping_and_replacement() -> None:
-    html = """
-    <html>
-      <body>
-        <img src="https://cdn.prod.website-files.com/67c7070e70765599c7796390/photo.jpg" srcset="https://cdn.prod.website-files.com/67c7070e70765599c7796390/photo.jpg 2x" />
-        <div style="background-image: url('https://i.vexy.art/bg.png');"></div>
-        <a href="https://i.fontlab.com/doc.pdf">Link</a>
-      </body>
-    </html>
-    """
-    cloudinary_conf = {
-        "cl_cloud": "testcloud",
-        "cl_map": {
-            "https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw",
-            "https://i.vexy.art": "v",
-            "https://i.fontlab.com": "i",
-        },
-        "cl_trans": "c_limit,w_auto/f_auto,q_auto/",
-        "cl_responsive": {"cl_trans_thumb": "c_limit,w_100/f_auto/", "methodology": "modern"},
-    }
-    paths = BuildPaths(
-        root=Path("."),
-        src_docs=Path("."),
-        markdown=Path("."),
-        static_docs=Path("."),
-        webflow_cache=Path("."),
-        build_docs=Path("."),
-        public=Path("."),
-        old_pages_config=Path("."),
-    )
-    builder = SiteBuilder(paths)
-    processed = builder.process_html_cloudinary(html, cloudinary_conf)
-
-    # img tag should have class cld-responsive, src mapped to thumbnail, data-src mapped to cl_trans, and srcset cleared
-    assert "cld-responsive" in processed
-    assert (
-        'data-src="https://res.cloudinary.com/testcloud/image/upload/c_limit,w_auto/f_auto,q_auto/vw/photo.jpg"'
-        in processed
-    )
-    assert (
-        'src="https://res.cloudinary.com/testcloud/image/upload/c_limit,w_100/f_auto/vw/photo.jpg"'
-        in processed
-    )
-    assert "srcset" not in processed
-
-    # Div style background url should be mapped with normal transformation
-    assert (
-        "background-image: url('https://res.cloudinary.com/testcloud/image/upload/c_limit,w_auto/f_auto,q_auto/v/bg.png')"
-        in processed
-    )
-
-    # anchor tag href with non-media (pdf) should remain untouched
-    assert 'href="https://i.fontlab.com/doc.pdf"' in processed
-
-
-def _cloudinary_builder() -> SiteBuilder:
-    return SiteBuilder(
-        BuildPaths(
-            root=Path("."),
-            src_docs=Path("."),
-            markdown=Path("."),
-            static_docs=Path("."),
-            webflow_cache=Path("."),
-            build_docs=Path("."),
-            public=Path("."),
-            old_pages_config=Path("."),
-        )
-    )
-
-
-def test_cloudinary_svg_uses_simple_static_url() -> None:
-    html = (
-        "<html><body>"
-        '<img id="svg" src="https://cdn.prod.website-files.com/67c7070e70765599c7796390/x.svg">'
-        '<img id="png" src="https://cdn.prod.website-files.com/67c7070e70765599c7796390/y.png">'
-        '<div style="background-image:url(https://cdn.prod.website-files.com/67c7070e70765599c7796390/bg.svg)"></div>'
-        "</body></html>"
-    )
-    conf = {
-        "cl_cloud": "fontlab",
-        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
-        "cl_trans": "c_limit,w_auto/f_auto,q_auto,dpr_auto/",
-        "cl_responsive": {"methodology": "modern", "placeholder": "blur"},
-    }
-    out = _cloudinary_builder().process_html_cloudinary(html, conf)
-    soup = BeautifulSoup(out, "html.parser")
-
-    svg = soup.find(id="svg")
-    # SVG: simple f_svg,q_auto URL, no responsive class/script participation.
-    assert svg["src"] == ("https://res.cloudinary.com/fontlab/image/upload/f_svg,q_auto/vw/x.svg")
-    assert svg.get("class") is None
-    assert svg.get("data-src") is None
-
-    # Raster image keeps the full responsive treatment.
-    png = soup.find(id="png")
-    assert "cld-responsive" in (png.get("class") or [])
-    assert "w_auto" in png["data-src"]
-
-    # SVG referenced from CSS is simplified too.
-    assert "url(https://res.cloudinary.com/fontlab/image/upload/f_svg,q_auto/vw/bg.svg)" in out
-
-
-def test_cloudinary_opt_out_attribute_skips_responsive() -> None:
-    html = (
-        "<html><body>"
-        '<img id="out" data-cld-responsive="false" '
-        'src="https://cdn.prod.website-files.com/67c7070e70765599c7796390/logo.png">'
-        "</body></html>"
-    )
-    conf = {
-        "cl_cloud": "fontlab",
-        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
-        "cl_trans": "c_limit,w_auto/f_auto,q_auto,dpr_auto/",
-        "cl_trans_static": "f_auto,q_auto",
-        "cl_responsive": {"methodology": "modern"},
-    }
-    out = _cloudinary_builder().process_html_cloudinary(html, conf)
-    img = BeautifulSoup(out, "html.parser").find(id="out")
-    # Opted-out image: static URL (no w_auto), no responsive class, no data-src.
-    assert img["src"] == (
-        "https://res.cloudinary.com/fontlab/image/upload/f_auto,q_auto/vw/logo.png"
-    )
-    assert img.get("class") is None
-    assert img.get("data-src") is None
-    assert "w_auto" not in img["src"]
-
-
-def test_cloudinary_responsive_legacy_methodology() -> None:
-    html = """
-    <html>
-      <body>
-        <img src="https://cdn.prod.website-files.com/67c7070e70765599c7796390/photo.jpg" />
-      </body>
-    </html>
-    """
-    cloudinary_conf = {
-        "cl_cloud": "testcloud",
-        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
-        "cl_responsive": {
-            "methodology": "legacy",
-            "cl_core_js": "https://custom.cdn/cloudinary-core.js",
-        },
-    }
-    paths = BuildPaths(
-        root=Path("."),
-        src_docs=Path("."),
-        markdown=Path("."),
-        static_docs=Path("."),
-        webflow_cache=Path("."),
-        build_docs=Path("."),
-        public=Path("."),
-        old_pages_config=Path("."),
-    )
-    builder = SiteBuilder(paths)
-    processed = builder.process_html_cloudinary(html, cloudinary_conf)
-
-    # Should include legacy script injection
-    assert (
-        '<script src="https://custom.cdn/cloudinary-core.js" type="text/javascript"></script>'
-        in processed
-    )
-    assert "var cl = cloudinary.Cloudinary.new({cloud_name: 'testcloud'});" in processed
-    assert "cl.responsive();" in processed
-
-
-def test_cloudinary_responsive_modern_methodology() -> None:
-    html = """
-    <html>
-      <body>
-        <img src="https://cdn.prod.website-files.com/67c7070e70765599c7796390/photo.jpg" />
-      </body>
-    </html>
-    """
-    cloudinary_conf = {
-        "cl_cloud": "testcloud",
-        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
-        "cl_responsive": {"methodology": "modern"},
-    }
-    paths = BuildPaths(
-        root=Path("."),
-        src_docs=Path("."),
-        markdown=Path("."),
-        static_docs=Path("."),
-        webflow_cache=Path("."),
-        build_docs=Path("."),
-        public=Path("."),
-        old_pages_config=Path("."),
-    )
-    builder = SiteBuilder(paths)
-    processed = builder.process_html_cloudinary(html, cloudinary_conf)
-
-    # Should include ResizeObserver script injection
-    assert "ResizeObserver" in processed
-    assert "cld-responsive" in processed
-    # But NOT the legacy script or cloudinary-core reference
-    assert "cloudinary-core" not in processed
-
-
-def test_responsive_script_does_not_clobber_opacity() -> None:
-    """The responsive load-in fade must use ``filter`` (blur) only and never set
-    inline ``opacity``: an inline opacity would override class/CSS-driven opacity
-    animations (e.g. scroll-driven layer reveals that toggle ``opacity:0/1`` per
-    step), forcing every responsive image permanently visible."""
-    html = (
-        "<html><body>"
-        '<img src="https://cdn.prod.website-files.com/67c7070e70765599c7796390/photo.jpg" />'
-        "</body></html>"
-    )
-    cl_map = {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"}
-    for lazyload in ("observer", "native"):
-        conf = {
-            "cl_cloud": "testcloud",
-            "cl_map": cl_map,
-            "cl_responsive": {"methodology": "modern", "lazyload": lazyload},
-        }
-        processed = _cloudinary_builder().process_html_cloudinary(html, conf)
-        assert "style.opacity" not in processed, lazyload
-        assert "opacity 0.4s" not in processed, lazyload
-        # the blur-based load-in effect is retained
-        assert "blur(4px)" in processed, lazyload
-
-
-def test_configurable_settings_overrides(tmp_path: Path) -> None:
-    # Test frontmatter key and old pages config path overrides
-    config_file = tmp_path / "config.json"
-    config_file.write_text(
-        '{"frontmatter_key": "custom-import-url", "old_pages_config": "custom-old-pages.yml"}',
+def test_discover_webflow_pages_when_placeholder_exists_then_cache_path_matches(
+    tmp_path: Path,
+) -> None:
+    markdown = tmp_path / "src_docs/md/font-converter"
+    markdown.mkdir(parents=True)
+    (markdown / "transtype.md").write_text(
+        "---\ntitle: TransType\nwebflow-import-url: https://example.test/transtype\n---\n# T\n",
         encoding="utf-8",
     )
     paths = BuildPaths.from_root(tmp_path)
-    builder = SiteBuilder(paths, config_path=config_file)
-
-    # Check frontmatter key
-    markdown_dir = tmp_path / "src_docs/md"
-    markdown_dir.mkdir(parents=True)
-    (markdown_dir / "page.md").write_text(
-        "---\ntitle: Page\ncustom-import-url: https://example.test/import\n---\n# Content\n",
-        encoding="utf-8",
-    )
-    pages = builder.discover_webflow_pages()
+    pages = SiteBuilder(paths).discover_webflow_pages()
     assert len(pages) == 1
-    assert pages[0].import_url == "https://example.test/import"
+    assert pages[0].cache_path == tmp_path / "wf_cache/font-converter/transtype/index.html"
 
-    # Check old pages config path
-    (tmp_path / "custom-old-pages.yml").write_text(
-        "old_public: legacy-dir\npages:\n  about.md: about.html\n", encoding="utf-8"
+
+def test_load_old_pages_when_config_present_then_resolves_paths(tmp_path: Path) -> None:
+    src = tmp_path / "src_docs"
+    src.mkdir()
+    (src / "old-pages.yml").write_text(
+        "old_public: legacy/public\npages:\n  cookies.md: cookies/index.html\n",
+        encoding="utf-8",
     )
-    mapping = builder.load_old_pages()
-    assert mapping is not None
-    assert mapping.old_public == (tmp_path / "legacy-dir").resolve()
-    assert mapping.pages == {"about.md": "about.html"}
-
-
-def test_mkdocs_command_override(tmp_path: Path) -> None:
-    config_file = tmp_path / "config.json"
-    config_file.write_text('{"mkdocs_command": "echo build {config_file}"}', encoding="utf-8")
-
-    # Setup mock src_docs/mkdocs.yml so run_static_builder doesn't raise FileNotFoundError
-    src_docs = tmp_path / "src_docs"
-    src_docs.mkdir()
-    (src_docs / "mkdocs.yml").write_text("site_name: Test", encoding="utf-8")
-
     paths = BuildPaths.from_root(tmp_path)
-    builder = SiteBuilder(paths, config_path=config_file)
-    builder.run_static_builder()
-
-
-def test_cloudinary_lazyload_options() -> None:
-    html = """
-    <html>
-      <body>
-        <img src="https://cdn.prod.website-files.com/67c7070e70765599c7796390/photo.jpg" />
-      </body>
-    </html>
-    """
-
-    # 1. lazyload=True (equivalent to "observer" when methodology is "modern")
-    conf_observer = {
-        "cl_cloud": "testcloud",
-        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
-        "cl_responsive": {"methodology": "modern", "lazyload": True},
-    }
-    builder = SiteBuilder(
-        BuildPaths(
-            Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path(".")
-        )
-    )
-    processed = builder.process_html_cloudinary(html, conf_observer)
-    assert 'loading="lazy"' in processed
-    assert "IntersectionObserver" in processed
-
-    # 2. lazyload="native"
-    conf_native = {
-        "cl_cloud": "testcloud",
-        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
-        "cl_responsive": {"methodology": "modern", "lazyload": "native"},
-    }
-    processed = builder.process_html_cloudinary(html, conf_native)
-    assert 'loading="lazy"' in processed
-    assert "IntersectionObserver" not in processed
-    assert "ResizeObserver" in processed
-
-    # 3. lazyload="observer"
-    conf_obs_str = {
-        "cl_cloud": "testcloud",
-        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
-        "cl_responsive": {"methodology": "modern", "lazyload": "observer"},
-    }
-    processed = builder.process_html_cloudinary(html, conf_obs_str)
-    assert 'loading="lazy"' in processed
-    assert "IntersectionObserver" in processed
-
-    # 4. lazyload=False
-    conf_false = {
-        "cl_cloud": "testcloud",
-        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
-        "cl_responsive": {"methodology": "modern", "lazyload": False},
-    }
-    processed = builder.process_html_cloudinary(html, conf_false)
-    assert 'loading="lazy"' not in processed
-    assert "IntersectionObserver" not in processed
-    assert "ResizeObserver" in processed
-
-
-def test_cloudinary_placeholder_options() -> None:
-    html = """
-    <html>
-      <body>
-        <img src="https://cdn.prod.website-files.com/67c7070e70765599c7796390/photo.jpg" />
-      </body>
-    </html>
-    """
-    builder = SiteBuilder(
-        BuildPaths(
-            Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path(".")
-        )
-    )
-
-    # 1. placeholder="blur" -> e_blur:2000,f_auto,q_auto:low
-    conf = {
-        "cl_cloud": "testcloud",
-        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
-        "cl_responsive": {"methodology": "modern", "placeholder": "blur"},
-    }
-    processed = builder.process_html_cloudinary(html, conf)
-    assert "e_blur:2000,f_auto,q_auto:low" in processed
-
-    # 2. placeholder="pixelate" -> e_pixelate:100,f_auto,q_auto:low
-    conf = {
-        "cl_cloud": "testcloud",
-        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
-        "cl_responsive": {"methodology": "modern", "placeholder": "pixelate"},
-    }
-    processed = builder.process_html_cloudinary(html, conf)
-    assert "e_pixelate:100,f_auto,q_auto:low" in processed
-
-    # 3. placeholder="vectorize" -> e_vectorize,f_auto,q_auto:low
-    conf = {
-        "cl_cloud": "testcloud",
-        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
-        "cl_responsive": {"methodology": "modern", "placeholder": "vectorize"},
-    }
-    processed = builder.process_html_cloudinary(html, conf)
-    assert "e_vectorize,f_auto,q_auto:low" in processed
-
-    # 4. placeholder="predominant" -> c_fill,w_1,h_1/f_auto,q_auto:low
-    conf = {
-        "cl_cloud": "testcloud",
-        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
-        "cl_responsive": {"methodology": "modern", "placeholder": "predominant"},
-    }
-    processed = builder.process_html_cloudinary(html, conf)
-    assert "c_fill,w_1,h_1/f_auto,q_auto:low" in processed
-
-    # 5. placeholder="predominant-color" -> c_fill,w_1,h_1/f_auto,q_auto:low
-    conf = {
-        "cl_cloud": "testcloud",
-        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
-        "cl_responsive": {"methodology": "modern", "placeholder": "predominant-color"},
-    }
-    processed = builder.process_html_cloudinary(html, conf)
-    assert "c_fill,w_1,h_1/f_auto,q_auto:low" in processed
-
-    # 6. placeholder="custom-trans-string" -> custom-trans-string
-    conf = {
-        "cl_cloud": "testcloud",
-        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
-        "cl_responsive": {"methodology": "modern", "placeholder": "custom-trans-string"},
-    }
-    processed = builder.process_html_cloudinary(html, conf)
-    assert "custom-trans-string" in processed
-
-    # 7. placeholder=False -> blank GIF
-    conf = {
-        "cl_cloud": "testcloud",
-        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
-        "cl_responsive": {"methodology": "modern", "placeholder": False},
-    }
-    processed = builder.process_html_cloudinary(html, conf)
-    assert (
-        'src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"'
-        in processed
-    )
-
-
-def test_cloudinary_accessibility_options() -> None:
-    html = """
-    <html>
-      <body>
-        <img src="https://cdn.prod.website-files.com/67c7070e70765599c7796390/photo.jpg" />
-      </body>
-    </html>
-    """
-    builder = SiteBuilder(
-        BuildPaths(
-            Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path(".")
-        )
-    )
-
-    # 1. accessibility="colorblind" -> e_assist_colorblind
-    conf = {
-        "cl_cloud": "testcloud",
-        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
-        "cl_responsive": {
-            "methodology": "modern",
-            "placeholder": "blur",
-            "accessibility": "colorblind",
-        },
-    }
-    processed = builder.process_html_cloudinary(html, conf)
-    # Accessibility effect must be applied to both high-quality source (data-src) and placeholder (src)
-    assert "/e_assist_colorblind/vw/photo.jpg" in processed
-    assert "e_blur:2000,f_auto,q_auto:low/e_assist_colorblind/vw/photo.jpg" in processed
-
-    # 2. accessibility="monochrome" -> e_grayscale
-    conf = {
-        "cl_cloud": "testcloud",
-        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
-        "cl_responsive": {
-            "methodology": "modern",
-            "placeholder": "blur",
-            "accessibility": "monochrome",
-        },
-    }
-    processed = builder.process_html_cloudinary(html, conf)
-    assert "/e_grayscale/vw/photo.jpg" in processed
-    assert "e_blur:2000,f_auto,q_auto:low/e_grayscale/vw/photo.jpg" in processed
-
-    # 3. accessibility="darkmode" -> e_brightness_hsb:-30
-    conf = {
-        "cl_cloud": "testcloud",
-        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
-        "cl_responsive": {
-            "methodology": "modern",
-            "placeholder": "blur",
-            "accessibility": "darkmode",
-        },
-    }
-    processed = builder.process_html_cloudinary(html, conf)
-    assert "/e_brightness_hsb:-30/vw/photo.jpg" in processed
-    assert "e_blur:2000,f_auto,q_auto:low/e_brightness_hsb:-30/vw/photo.jpg" in processed
-
-    # 4. accessibility="brightmode" -> e_brightness_hsb:30
-    conf = {
-        "cl_cloud": "testcloud",
-        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
-        "cl_responsive": {
-            "methodology": "modern",
-            "placeholder": "blur",
-            "accessibility": "brightmode",
-        },
-    }
-    processed = builder.process_html_cloudinary(html, conf)
-    assert "/e_brightness_hsb:30/vw/photo.jpg" in processed
-    assert "e_blur:2000,f_auto,q_auto:low/e_brightness_hsb:30/vw/photo.jpg" in processed
-
-    # 5. accessibility="custom-acc-effect"
-    conf = {
-        "cl_cloud": "testcloud",
-        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
-        "cl_responsive": {
-            "methodology": "modern",
-            "placeholder": "blur",
-            "accessibility": "custom-acc-effect",
-        },
-    }
-    processed = builder.process_html_cloudinary(html, conf)
-    assert "/custom-acc-effect/vw/photo.jpg" in processed
-    assert "e_blur:2000,f_auto,q_auto:low/custom-acc-effect/vw/photo.jpg" in processed
-
-
-def test_cloudinary_excludes_non_media_assets() -> None:
-    html = """
-    <html>
-      <head>
-        <link rel="stylesheet" href="https://cdn.prod.website-files.com/67c7070e70765599c7796390/css/vexy.webflow.css" />
-        <script src="https://cdn.prod.website-files.com/67c7070e70765599c7796390/js/webflow.js"></script>
-        <link rel="manifest" href="https://cdn.prod.website-files.com/67c7070e70765599c7796390/manifest.json" />
-        <style>
-          @font-face {
-            font-family: 'Test';
-            src: url('https://cdn.prod.website-files.com/67c7070e70765599c7796390/fonts/test.woff2') format('woff2');
-          }
-          .bg {
-            background-image: url('https://cdn.prod.website-files.com/67c7070e70765599c7796390/images/bg.png');
-          }
-        </style>
-      </head>
-      <body>
-        <img src="https://cdn.prod.website-files.com/67c7070e70765599c7796390/images/photo.jpg" />
-        <a href="https://cdn.prod.website-files.com/67c7070e70765599c7796390/doc.pdf">PDF</a>
-        <a href="https://cdn.prod.website-files.com/67c7070e70765599c7796390/archive.zip">ZIP</a>
-      </body>
-    </html>
-    """
-    conf = {
-        "cl_cloud": "testcloud",
-        "cl_map": {"https://cdn.prod.website-files.com/67c7070e70765599c7796390": "vw"},
-        "cl_trans": "c_limit,w_auto/f_auto,q_auto/",
-    }
-    builder = SiteBuilder(
-        BuildPaths(
-            Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path(".")
-        )
-    )
-    processed = builder.process_html_cloudinary(html, conf)
-
-    # CSS link, JS script, font woff2, pdf, and zip urls must remain untouched
-    assert (
-        'href="https://cdn.prod.website-files.com/67c7070e70765599c7796390/css/vexy.webflow.css"'
-        in processed
-    )
-    assert (
-        'src="https://cdn.prod.website-files.com/67c7070e70765599c7796390/js/webflow.js"'
-        in processed
-    )
-    assert (
-        'href="https://cdn.prod.website-files.com/67c7070e70765599c7796390/manifest.json"'
-        in processed
-    )
-    assert (
-        "url('https://cdn.prod.website-files.com/67c7070e70765599c7796390/fonts/test.woff2')"
-        in processed
-    )
-    assert 'href="https://cdn.prod.website-files.com/67c7070e70765599c7796390/doc.pdf"' in processed
-    assert (
-        'href="https://cdn.prod.website-files.com/67c7070e70765599c7796390/archive.zip"'
-        in processed
-    )
-
-    # Images must be replaced
-    assert (
-        "url('https://res.cloudinary.com/testcloud/image/upload/c_limit,w_auto/f_auto,q_auto/vw/images/bg.png')"
-        in processed
-    )
-    assert (
-        'src="https://res.cloudinary.com/testcloud/image/upload/c_limit,w_auto/f_auto,q_auto/vw/images/photo.jpg"'
-        in processed
-    )
-
-
-def test_cloudinary_excludes_nested_fetch_urls() -> None:
-    html = """
-    <html>
-      <body>
-        <video poster="https://res.cloudinary.com/testcloud/image/fetch/q_60/f_auto/https://i.vexy.art/vl/websiteart/poster.png"></video>
-        <img src="https://i.vexy.art/vl/normal.png" />
-      </body>
-    </html>
-    """
-    conf = {
-        "cl_cloud": "testcloud",
-        "cl_map": {"https://i.vexy.art": "v"},
-        "cl_trans": "c_limit,w_auto/f_auto,q_auto/",
-    }
-    builder = SiteBuilder(
-        BuildPaths(
-            Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path("."), Path(".")
-        )
-    )
-    processed = builder.process_html_cloudinary(html, conf)
-
-    # The nested URL must NOT be touched
-    assert (
-        'poster="https://res.cloudinary.com/testcloud/image/fetch/q_60/f_auto/https://i.vexy.art/vl/websiteart/poster.png"'
-        in processed
-    )
-    # The normal image URL must be replaced
-    assert (
-        'src="https://res.cloudinary.com/testcloud/image/upload/c_limit,w_auto/f_auto,q_auto/v/vl/normal.png"'
-        in processed
-    )
-
-
-def test_split_google_fonts_links_splits_multi_family() -> None:
-    html = (
-        '<head><link rel="stylesheet" href="https://fonts.googleapis.com/css2'
-        '?family=Crimson+Pro:wght@400&amp;family=EB+Garamond&amp;display=swap">'
-        "</head>"
-    )
-    out = split_google_fonts_links(html)
-    assert out.count("fonts.googleapis.com/css2") == 2
-    assert "family=Crimson+Pro:wght@400" in out
-    assert "family=EB+Garamond" in out
-    # No link retains the multi-family chain.
-    import re
-
-    for link in re.findall(r"css2\?[^\"']*", out):
-        assert link.count("family=") == 1
-        assert "display=swap" in link
-
-
-def test_split_google_fonts_links_handles_two_multi_family_links() -> None:
-    # Regression: bs4 >=4.13 ``decompose`` nulls a tag's ``.attrs`` and can clear
-    # a sibling link still held in the live ResultSet, which crashed the in-loop
-    # ``link["href"]`` read once a second multi-family link was split.
-    html = (
-        "<head>"
-        '<link rel="stylesheet" href="https://fonts.googleapis.com/css2'
-        '?family=Alegreya&amp;family=Outfit&amp;display=swap">'
-        '<link rel="stylesheet" href="/local.css">'
-        '<link rel="stylesheet" href="https://fonts.googleapis.com/css2'
-        '?family=Commissioner&amp;family=Ysabeau&amp;display=swap">'
-        "</head>"
-    )
-    out = split_google_fonts_links(html)
-    import re
-
-    links = re.findall(r"css2\?[^\"']*", out)
-    assert len(links) == 4
-    for link in links:
-        assert link.count("family=") == 1
-    for family in ("Alegreya", "Outfit", "Commissioner", "Ysabeau"):
-        assert f"family={family}" in out
-    assert "/local.css" in out
-
-
-def test_split_google_fonts_links_noop_when_single_family() -> None:
-    html = '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bona+Nova&amp;display=swap">'
-    assert split_google_fonts_links(html) == html
-
-
-def test_split_google_fonts_links_noop_when_no_google_fonts() -> None:
-    html = "<head><link rel=stylesheet href='/style.css'></head>"
-    assert split_google_fonts_links(html) == html
-
-
-def test_split_frontmatter_when_block_present_then_returns_inner_and_body() -> None:
-    text = "---\ntitle: Vexy\nwebflow-import-url: https://x.test/\n---\n\nOld body\n"
-    frontmatter, body = split_frontmatter(text)
-    assert frontmatter == "title: Vexy\nwebflow-import-url: https://x.test/"
-    assert body == "Old body\n"
-
-
-def test_split_frontmatter_when_no_block_then_returns_none_and_text() -> None:
-    text = "# Just a heading\n\nNo frontmatter here.\n"
-    frontmatter, body = split_frontmatter(text)
-    assert frontmatter is None
-    assert body == text
-
-
-def test_split_frontmatter_preserves_comments_and_quoting() -> None:
-    text = '---\n# a comment\ntitle: "Quoted"\n---\nbody\n'
-    frontmatter, _ = split_frontmatter(text)
-    assert frontmatter == '# a comment\ntitle: "Quoted"'
+    mapping = SiteBuilder(paths).load_old_pages()
+    assert mapping is not None
+    assert mapping.old_public == (tmp_path / "legacy/public").resolve()
+    assert mapping.pages == {"cookies.md": "cookies/index.html"}
 
 
 def test_update_stub_keeps_frontmatter_and_replaces_body(
@@ -943,104 +231,61 @@ def test_extract_markdown_via_url22md_when_real_binary_then_returns_markdown(
 
 
 # ---------------------------------------------------------------------------
-# exempt_scripts_from_rocket_loader unit tests
+# Config loading
 # ---------------------------------------------------------------------------
 
 
-def _make_builder() -> SiteBuilder:
-    """Minimal SiteBuilder with no config (no cloudinary, etc.)."""
-    paths = BuildPaths(
-        root=Path("."),
-        src_docs=Path("."),
-        markdown=Path("."),
-        static_docs=Path("."),
-        webflow_cache=Path("."),
-        build_docs=Path("."),
-        public=Path("."),
-        old_pages_config=Path("."),
+def test_config_loading_from_file_and_root(tmp_path: Path) -> None:
+    # Explicit config path
+    config_file = tmp_path / "custom-config.json"
+    config_file.write_text('{"user_agent": "custom_agent"}', encoding="utf-8")
+    paths = BuildPaths.from_root(tmp_path)
+    builder = SiteBuilder(paths, config_path=config_file)
+    assert builder.config == {"user_agent": "custom_agent"}
+
+    # Default config from root
+    root_config = tmp_path / "fontlab-www-toolkit.json"
+    root_config.write_text('{"user_agent": "root_agent"}', encoding="utf-8")
+    builder_default = SiteBuilder(paths)
+    assert builder_default.config == {"user_agent": "root_agent"}
+
+
+def test_configurable_settings_overrides(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.json"
+    config_file.write_text(
+        '{"frontmatter_key": "custom-import-url", "old_pages_config": "custom-old-pages.yml"}',
+        encoding="utf-8",
     )
-    return SiteBuilder(paths)
+    paths = BuildPaths.from_root(tmp_path)
+    builder = SiteBuilder(paths, config_path=config_file)
 
-
-def test_exempt_scripts_classic_inline_gets_cfasync() -> None:
-    html = "<script>console.log('x')</script>"
-    out = exempt_scripts_from_rocket_loader(html)
-    assert 'data-cfasync="false"' in out
-
-
-def test_exempt_scripts_module_gets_cfasync() -> None:
-    html = '<script type="module" src="/a.js"></script>'
-    out = exempt_scripts_from_rocket_loader(html)
-    assert 'data-cfasync="false"' in out
-
-
-def test_exempt_scripts_text_javascript_gets_cfasync() -> None:
-    html = '<script type="text/javascript" src="/a.js"></script>'
-    out = exempt_scripts_from_rocket_loader(html)
-    assert 'data-cfasync="false"' in out
-
-
-def test_exempt_scripts_application_json_untouched() -> None:
-    html = '<script type="application/json">{"a":1}</script>'
-    out = exempt_scripts_from_rocket_loader(html)
-    assert "data-cfasync" not in out
-
-
-def test_exempt_scripts_ld_json_untouched() -> None:
-    html = '<script type="application/ld+json">{}</script>'
-    out = exempt_scripts_from_rocket_loader(html)
-    assert "data-cfasync" not in out
-
-
-def test_exempt_scripts_idempotent_when_already_has_attr() -> None:
-    html = '<script data-cfasync="false" src="/a.js"></script>'
-    out = exempt_scripts_from_rocket_loader(html)
-    assert out.count("data-cfasync") == 1
-
-
-def test_exempt_scripts_no_scripts_returns_same_object() -> None:
-    h = "<p>hi</p>"
-    assert exempt_scripts_from_rocket_loader(h) is h
-
-
-def test_exempt_scripts_mixed_counts_correctly() -> None:
-    html = (
-        "<script>a()</script>"
-        '<script type="module">b()</script>'
-        '<script type="application/json">{}</script>'
+    markdown_dir = tmp_path / "src_docs/md"
+    markdown_dir.mkdir(parents=True)
+    (markdown_dir / "page.md").write_text(
+        "---\ntitle: Page\ncustom-import-url: https://example.test/import\n---\n# Content\n",
+        encoding="utf-8",
     )
-    out = exempt_scripts_from_rocket_loader(html)
-    assert out.count('data-cfasync="false"') == 2
+    pages = builder.discover_webflow_pages()
+    assert len(pages) == 1
+    assert pages[0].import_url == "https://example.test/import"
 
-
-# ---------------------------------------------------------------------------
-# Integration tests through SiteBuilder.process_page_html
-# ---------------------------------------------------------------------------
-
-
-def test_process_page_html_rocket_loader_default_on() -> None:
-    """Default config (rocket_loader_optout not set) must inject data-cfasync."""
-    builder = _make_builder()
-    html = '<html><head></head><body><script type="module">x()</script></body></html>'
-    out = builder.process_page_html(html)
-    assert 'data-cfasync="false"' in out
-
-
-def test_process_page_html_rocket_loader_optout_false_skips_injection() -> None:
-    """rocket_loader_optout=False must leave scripts untouched."""
-    paths = BuildPaths(
-        root=Path("."),
-        src_docs=Path("."),
-        markdown=Path("."),
-        static_docs=Path("."),
-        webflow_cache=Path("."),
-        build_docs=Path("."),
-        public=Path("."),
-        old_pages_config=Path("."),
+    (tmp_path / "custom-old-pages.yml").write_text(
+        "old_public: legacy-dir\npages:\n  about.md: about.html\n", encoding="utf-8"
     )
-    builder = SiteBuilder(paths)
-    # Inject config directly (no file path needed for this test)
-    builder.config = {"rocket_loader_optout": False}
-    html = '<html><head></head><body><script type="module">x()</script></body></html>'
-    out = builder.process_page_html(html)
-    assert "data-cfasync" not in out
+    mapping = builder.load_old_pages()
+    assert mapping is not None
+    assert mapping.old_public == (tmp_path / "legacy-dir").resolve()
+    assert mapping.pages == {"about.md": "about.html"}
+
+
+def test_mkdocs_command_override(tmp_path: Path) -> None:
+    config_file = tmp_path / "config.json"
+    config_file.write_text('{"mkdocs_command": "echo build {config_file}"}', encoding="utf-8")
+
+    src_docs = tmp_path / "src_docs"
+    src_docs.mkdir()
+    (src_docs / "mkdocs.yml").write_text("site_name: Test", encoding="utf-8")
+
+    paths = BuildPaths.from_root(tmp_path)
+    builder = SiteBuilder(paths, config_path=config_file)
+    builder.run_static_builder()

@@ -167,11 +167,17 @@ Mirrors the local backup, rsyncs to the remote, commits both the site repo and
 ```bash
 git clone git@github.com:Fontlab/fontlab-www-toolkit.git
 cd fontlab-www-toolkit
-uv sync
-uv run pytest -q
+uv sync --group dev
+uv run ruff check src/ tests/      # lint
+uv run mypy src/fontlab_www_toolkit/  # typecheck
+uv run pytest -q                   # test
 ```
 
 Version comes from git tags via `hatch-vcs`. Tag with semver (`v1.2.3`) to bump.
+
+See [CHANGELOG.md](CHANGELOG.md) for release history and [src_docs/](src_docs/) for
+full documentation covering the four-layer build flow, Webflow stub format,
+`wf_cache/` layout, and `www-admin` integration.
 
 ## Publish
 

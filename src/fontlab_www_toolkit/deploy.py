@@ -66,7 +66,9 @@ def mirror_local(source: Path, destination: Path) -> bool:
     rsync = shutil.which("rsync")
     if rsync:
         cmd = [
-            rsync, "-a", "--delete",
+            rsync,
+            "-a",
+            "--delete",
             "--exclude=.DS_Store",
             f"{source}/",
             f"{destination}/",
@@ -103,7 +105,9 @@ def rsync_remote(target: DeployTarget) -> None:
 def git_status_dirty(repo: Path) -> bool:
     result = subprocess.run(
         ["git", "-C", str(repo), "status", "--porcelain"],
-        check=True, capture_output=True, text=True,
+        check=True,
+        capture_output=True,
+        text=True,
     )
     return result.stdout.strip() != ""
 

@@ -146,8 +146,8 @@ class SiteBuilder:
         try:
             soup_temp = BeautifulSoup(html, "html.parser")
             script = soup_temp.find("script", id="fontlab-toolkit-config", type="application/json")
-            if script and script.string:
-                page_config = json.loads(script.string.strip())
+            if script and script.string:  # type: ignore[union-attr]
+                page_config = json.loads(script.string.strip())  # type: ignore[union-attr]
         except Exception:
             pass
 
@@ -209,10 +209,12 @@ class SiteBuilder:
         cl_trans_svg = cloudinary_conf.get("cl_trans_svg", "f_svg,q_auto")
         cl_trans_static = cloudinary_conf.get("cl_trans_static", "f_auto,q_auto")
 
-        cl_responsive = cloudinary_conf.get("cl_responsive")
-        cl_responsive_enabled = bool(cl_responsive)
-        if cl_responsive_enabled and not isinstance(cl_responsive, dict):
-            cl_responsive = {}
+        _cl_resp_raw = cloudinary_conf.get("cl_responsive")
+        cl_responsive_enabled = bool(_cl_resp_raw)
+        # Normalise to a plain dict so mypy can narrow .get() calls below.
+        # When disabled, cl_responsive is {} (never read); when enabled it is
+        # either the caller-supplied dict or {} (truthy non-dict coerced here).
+        cl_responsive: dict = _cl_resp_raw if isinstance(_cl_resp_raw, dict) else {}
 
         if cl_responsive_enabled:
             cl_trans_thumb = cl_responsive.get("cl_trans_thumb", "c_limit,w_128/f_auto,q_1/")

@@ -1,0 +1,50 @@
+# this_file: src_docs/mkdocs.yaml
+# MkDocs configuration for fontlab-www-toolkit API docs.
+# Build with:  cd src_docs && mkdocs build -f mkdocs.yaml -d ../docs/
+# Serve with:  cd src_docs && mkdocs serve -f mkdocs.yaml
+
+site_name: fontlab-www-toolkit
+site_description: Shared ProperDocs + MaterialX site builder for FontLab web properties
+site_url: https://github.com/Fontlab/fontlab-www-toolkit
+repo_url: https://github.com/Fontlab/fontlab-www-toolkit
+repo_name: Fontlab/fontlab-www-toolkit
+
+docs_dir: md
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.top
+    - content.code.copy
+
+markdown_extensions:
+  - admonition
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+  - attr_list
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Build flow: build-flow.md
+  - Webflow stubs: webflow-stubs.md
+  - wf_cache structure: wf-cache.md
+  - www-admin integration: www-admin.md
+  - Style guide: STYLE_GUIDE.md

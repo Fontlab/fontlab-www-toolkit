@@ -83,7 +83,22 @@ target-version = "py312"
 select = ["E", "F", "I", "UP"]
 ignore = ["E501"]
 
+[tool.mypy]
+python_version = "3.12"
+files = ["src/fontlab_www_toolkit"]
+# Third-party packages (fire, properdocs, mkdocs-materialx, markdownify) ship
+# no py.typed markers; ignore missing stubs rather than failing on imports.
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_return_any = false
+# Keep the config non-strict so consumer code stays easy to annotate
+# incrementally. Tighten as type coverage improves.
+disallow_untyped_defs = false
+check_untyped_defs = true
+
 [dependency-groups]
 dev = [
+  "mypy>=1.10",
   "pytest>=9.0.3",
+  "types-beautifulsoup4>=4.12",
 ]
