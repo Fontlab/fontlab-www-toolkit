@@ -590,7 +590,7 @@ class SiteBuilder:
         self.run_static_builder()
         overlay_directory(self.paths.webflow_cache, self.paths.build_docs)
         overlay_directory(self.paths.static_docs, self.paths.build_docs)
-        replace_directory(self.paths.build_docs, self.paths.public)
+        publish_directory(self.paths.build_docs, self.paths.public)
 
     def run_static_builder(self) -> None:
         config_file = self.paths.src_docs / "mkdocs.yml"
@@ -630,9 +630,15 @@ class SiteBuilder:
                 )
 
     def clean(self) -> None:
-        for path in (self.paths.build_docs, self.paths.public):
-            if path.exists():
-                shutil.rmtree(path)
+        if self.paths.build_docs.exists():
+            if self.paths.public.exists():
+                for item in self.paths.build_docs.iterdir():
+                    target = self.paths.public / item.name
+                    if target.is_dir():
+                        shutil.rmtree(target)
+                    elif target.exists():
+                        target.unlink()
+            shutil.rmtree(self.paths.build_docs)
 
 
 def parse_frontmatter(text: str) -> dict[str, str]:
@@ -1077,6 +1083,27 @@ def overlay_directory(source: Path, destination: Path) -> None:
             target.mkdir(parents=True, exist_ok=True)
         else:
             target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(item, target)
+
+
+def publish_directory(source: Path, destination: Path) -> None:
+    """Write ``source`` into ``destination``.
+
+    Only names that exist in ``source`` are replaced. Anything else already
+    in ``destination`` (hand-managed trees, leftover files) is left alone.
+    """
+    if not source.exists():
+        return
+    destination.mkdir(parents=True, exist_ok=True)
+    for item in source.iterdir():
+        target = destination / item.name
+        if target.is_dir():
+            shutil.rmtree(target)
+        elif target.exists():
+            target.unlink()
+        if item.is_dir():
+            shutil.copytree(item, target)
+        else:
             shutil.copy2(item, target)
 
 

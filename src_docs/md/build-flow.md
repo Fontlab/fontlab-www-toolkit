@@ -76,9 +76,10 @@ processing is applied.  Use this layer for:
 
 ## Layer 4 — Publish
 
-`build_docs/` is moved to `public/` via `replace_directory` (atomic swap for
-the consumer site).  The consumer site's deploy step (`deploy.py`) then rsyncs
-`public/` to the remote host.
+Each top-level name in `build_docs/` is copied over the same name in `public/`.
+Names that exist only in `public/` (not produced by this build) are not
+touched. The consumer site's deploy step (`deploy.py`) then rsyncs `public/`
+to the remote host.
 
 ## CLI flags
 
@@ -97,5 +98,5 @@ the consumer site).  The consumer site's deploy step (`deploy.py`) then rsyncs
                      └─────────────┘
   wf_cache/      ──overlay──▶ build_docs/   (Webflow pages win)
   static_docs/   ──overlay──▶ build_docs/   (static wins)
-  build_docs/    ──replace──▶ public/
+  build_docs/    ──publish names──▶ public/   (other public/ names untouched)
 ```

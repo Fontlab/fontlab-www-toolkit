@@ -72,7 +72,7 @@ class Cli:
             print(path.relative_to(paths.root))
 
     def clean(self, root: str | None = None, config: str | None = None) -> None:
-        """Delete ``build_docs/`` and ``public/``.
+        """Delete ``build_docs/`` and the matching names under ``public/``.
 
         Args:
             root: site repo root; defaults to the current working directory.

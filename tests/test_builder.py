@@ -26,6 +26,7 @@ from fontlab_www_toolkit.builder import (
     overlay_directory,
     parse_flat_yaml,
     parse_frontmatter,
+    publish_directory,
     remove_html_blocks,
     replace_directory,
     split_frontmatter,
@@ -126,6 +127,43 @@ def test_overlay_and_replace_directory(tmp_path: Path) -> None:
     replace_directory(src2, dst)
     assert (dst / "x.txt").read_text() == "y"
     assert not (dst / "sub").exists()
+
+
+def test_publish_directory_only_replaces_names_in_source(tmp_path: Path) -> None:
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    src.mkdir()
+    (src / "index.html").write_text("new")
+    (src / "lines").mkdir()
+    (src / "lines" / "index.html").write_text("lines")
+    (dst / "vextra" / "nano").mkdir(parents=True)
+    (dst / "vextra" / "nano" / "index.html").write_text("hand-managed")
+    (dst / "lines").mkdir(parents=True)
+    (dst / "lines" / "old.html").write_text("stale")
+
+    publish_directory(src, dst)
+
+    assert (dst / "index.html").read_text() == "new"
+    assert (dst / "lines" / "index.html").read_text() == "lines"
+    assert not (dst / "lines" / "old.html").exists()
+    assert (dst / "vextra" / "nano" / "index.html").read_text() == "hand-managed"
+
+
+def test_clean_only_removes_names_from_build_docs(tmp_path: Path) -> None:
+    (tmp_path / "src_docs" / "md").mkdir(parents=True)
+    public = tmp_path / "public"
+    (public / "vextra").mkdir(parents=True)
+    (public / "vextra" / "keep.txt").write_text("ok")
+    (public / "index.html").write_text("built")
+    build = tmp_path / "build_docs"
+    build.mkdir()
+    (build / "index.html").write_text("built")
+
+    SiteBuilder(BuildPaths.from_root(tmp_path)).clean()
+
+    assert not build.exists()
+    assert not (public / "index.html").exists()
+    assert (public / "vextra" / "keep.txt").read_text() == "ok"
 
 
 def test_convert_old_html_when_real_page_then_returns_markdown(tmp_path: Path) -> None:
