@@ -2,7 +2,7 @@
 
 All notable changes to `fontlab-www-toolkit` are documented here.
 
-## Unreleased
+## v1.0.9 — 2026-08-19
 
 ### Changed
 - Publish writes only the names present in `build_docs/` into `public/`.
