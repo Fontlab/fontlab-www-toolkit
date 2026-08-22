@@ -43,7 +43,7 @@ Some properties are not built by this toolkit but by their own CI — e.g. the
 TTH Debugger, whose GitHub Actions build lands in
 `https://fontlab.dev/tth-debugger/alpha-sdx992/`. Such a build exposes a
 `manifest.json` (`schema: fontlab-site-manifest/1`) listing every file with
-`path`, `size`, `sha256`, `type`, plus `name`, `version`, `commit`, `builtAt`,
+`path`, `size`, `sha256`, `type` (HTML entries may add `sha256Normalized`, the hash with ASCII whitespace removed), plus `name`, `version`, `commit`, `builtAt`,
 `baseUrl`, `entry`. `mirror` consumes that:
 
 ```bash

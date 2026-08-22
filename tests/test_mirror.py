@@ -14,6 +14,12 @@ from fontlab_www_toolkit import mirror as m
 BASE = "https://example.test/site/alpha/"
 
 
+def _norm(b: bytes) -> str:
+    import re
+
+    return hashlib.sha256(re.sub(rb"[ \t\r\n\f\v]+", b"", b)).hexdigest()
+
+
 def _manifest(files: dict[str, bytes], **extra) -> dict:
     return {
         "schema": m.SCHEMA,
@@ -25,6 +31,7 @@ def _manifest(files: dict[str, bytes], **extra) -> dict:
         "entry": "index.html",
         "files": [
             {"path": p, "size": len(b), "sha256": hashlib.sha256(b).hexdigest(), "type": "x"}
+            | ({"sha256Normalized": _norm(b)} if p.endswith(".html") else {})
             for p, b in files.items()
         ],
         **extra,
@@ -100,7 +107,7 @@ def test_mirror_when_sha_mismatch_then_dest_untouched(tmp_path, monkeypatch, sit
     dest = tmp_path / "out"
     _patched_mirror(monkeypatch, fake, dest)
     bad = _manifest(site)
-    bad["files"][0]["sha256"] = "0" * 64
+    bad["files"][1]["sha256"] = "0" * 64  # assets/app.js — no normalized fallback
     fake = FakeFetch(site, bad)
     with pytest.raises(m.MirrorError, match="sha256 mismatch"):
         _patched_mirror(monkeypatch, fake, dest)
@@ -209,3 +216,34 @@ def test_strip_cdn_injection_when_beacon_script_then_removed_but_app_scripts_kep
     )
     html = b"<html><head>" + app + b"</head><body>x" + beacon + b"</body></html>"
     assert m.strip_cdn_injection(html) == b"<html><head>" + app + b"</head><body>x</body></html>"
+
+
+def test_verify_blob_when_cdn_reflows_whitespace_then_normalized_hash_accepts():
+    original = b"<html>\n  <body>\n    <div></div>\n  </body>\n</html>\n"
+    served = original.replace(b"  </body>", CF_SNIPPET + b"\n</body>")
+    f = m.ManifestFile(
+        "index.html", len(original), hashlib.sha256(original).hexdigest(), _norm(original)
+    )
+    out = m.verify_blob(f, served)
+    assert b"__CF" not in out and m.normalized_sha256(out) == _norm(original)
+
+
+def test_verify_blob_when_no_normalized_hash_then_reflow_is_rejected():
+    original = b"<html>\n  <body>\n  </body>\n</html>\n"
+    served = original.replace(b"  </body>", b"\n</body>")
+    f = m.ManifestFile("index.html", len(original), hashlib.sha256(original).hexdigest())
+    with pytest.raises(m.MirrorError):
+        m.verify_blob(f, served)
+
+
+def test_mirror_when_reflowed_html_already_mirrored_then_second_run_is_noop(
+    tmp_path, monkeypatch, site
+):
+    html = b"<html>\n  <body>\n  </body>\n</html>\n"
+    site = dict(site, **{"index.html": html})
+    served = dict(site, **{"index.html": html.replace(b"  </body>", CF_SNIPPET + b"\n</body>")})
+    fake = FakeFetch(served, _manifest(site))
+    dest = tmp_path / "out"
+    _patched_mirror(monkeypatch, fake, dest)
+    res = _patched_mirror(monkeypatch, fake, dest)
+    assert res.changed is False, "whitespace-only difference must count as up to date"

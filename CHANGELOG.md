@@ -2,6 +2,16 @@
 
 All notable changes to `fontlab-www-toolkit` are documented here.
 
+## v1.0.13 — 2026-08-22
+
+### Added
+- `mirror`: honours the optional `sha256Normalized` manifest field (HTML
+  only; hash with ASCII whitespace removed). Cloudflare not only injects
+  scripts into HTML but also reflows whitespace around `</body>`, so the
+  exact bytes cannot be recovered; the normalized hash still proves the page
+  is the published one. A whitespace-only difference also counts as "up to
+  date" on later runs.
+
 ## v1.0.12 — 2026-08-22
 
 ### Fixed

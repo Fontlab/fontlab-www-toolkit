@@ -66,6 +66,9 @@ class ManifestFile:
     path: str
     size: int
     sha256: str
+    # HTML only: sha256 of the file with all ASCII whitespace removed. Lets a
+    # consumer verify a page the CDN has injected scripts into and reflowed.
+    sha256_normalized: str = ""
 
 
 @dataclass(frozen=True)
@@ -114,7 +117,10 @@ def parse_manifest(data: dict, manifest_url: str = "") -> Manifest:
             raise MirrorError(f"bad size for {path}: {size!r}")
         if len(sha) != 64 or any(c not in "0123456789abcdef" for c in sha):
             raise MirrorError(f"bad sha256 for {path}: {sha!r}")
-        files.append(ManifestFile(path=path, size=size, sha256=sha))
+        norm = str(entry.get("sha256Normalized", "")).lower()
+        if norm and (len(norm) != 64 or any(c not in "0123456789abcdef" for c in norm)):
+            raise MirrorError(f"bad sha256Normalized for {path}: {norm!r}")
+        files.append(ManifestFile(path=path, size=size, sha256=sha, sha256_normalized=norm))
     base_url = str(data.get("baseUrl") or "")
     if not base_url and manifest_url:
         base_url = manifest_url.rsplit("/", 1)[0] + "/"
@@ -148,6 +154,20 @@ def strip_cdn_injection(blob: bytes) -> bytes:
     )
 
 
+_WS = re.compile(rb"[ \t\r\n\f\v]+")
+
+
+def normalized_sha256(blob: bytes) -> str:
+    return hashlib.sha256(_WS.sub(b"", blob)).hexdigest()
+
+
+def blob_matches(f: ManifestFile, blob: bytes) -> bool:
+    """Exact match, or (HTML with ``sha256Normalized``) whitespace-insensitive match."""
+    if len(blob) == f.size and hashlib.sha256(blob).hexdigest() == f.sha256:
+        return True
+    return bool(f.sha256_normalized) and normalized_sha256(blob) == f.sha256_normalized
+
+
 def verify_blob(f: ManifestFile, blob: bytes) -> bytes:
     """Return ``blob`` (possibly cleaned of CDN injection) if it matches ``f``.
 
@@ -159,7 +179,7 @@ def verify_blob(f: ManifestFile, blob: bytes) -> bytes:
         if cleaned != blob:
             candidates.insert(0, cleaned)
     for cand in candidates:
-        if len(cand) == f.size and hashlib.sha256(cand).hexdigest() == f.sha256:
+        if blob_matches(f, cand):
             return cand
     if len(blob) != f.size:
         raise MirrorError(f"size mismatch for {f.path}: expected {f.size}, got {len(blob)}")
@@ -221,8 +241,8 @@ def mirror(
     )
     result = MirrorResult(dest=dest, manifest=manifest)
 
-    current = _current_state(dest)
-    wanted = {f.path: f.sha256 for f in manifest.files}
+    current = _current_state(dest, manifest)
+    wanted = {f.path: True for f in manifest.files}
     if current == wanted and not dry_run:
         log(f"{dest} already matches manifest — nothing to do")
         result.reused = len(manifest.files)
@@ -232,7 +252,7 @@ def mirror(
 
     if dry_run:
         for f in manifest.files:
-            state = "reuse" if current.get(f.path) == f.sha256 else "download"
+            state = "reuse" if current.get(f.path) else "download"
             log(f"[dry-run] {state:8} {f.path} ({f.size} B)")
         result.changed = current != wanted
         return result
@@ -248,7 +268,7 @@ def mirror(
             target.parent.mkdir(parents=True, exist_ok=True)
             _chmod_dirs_upto(target.parent, tmp_root)
             existing = dest / f.path
-            if current.get(f.path) == f.sha256 and existing.is_file():
+            if current.get(f.path) and existing.is_file():
                 shutil.copy2(existing, target)
                 result.reused += 1
                 continue
@@ -279,18 +299,24 @@ def mirror(
     return result
 
 
-def _current_state(dest: Path) -> dict[str, str]:
-    """Map relative path → sha256 for regular files currently in ``dest``."""
+def _current_state(dest: Path, manifest: Manifest) -> dict[str, bool]:
+    """Map relative path → "matches the manifest entry" for files in ``dest``.
+
+    Files not in the manifest map to False, so a stale extra file makes the
+    state differ from the manifest and triggers a refresh.
+    """
     if not dest.is_dir():
         return {}
-    state: dict[str, str] = {}
+    by_path = {f.path: f for f in manifest.files}
+    state: dict[str, bool] = {}
     for root, _dirs, files in os.walk(dest):
         for name in files:
             p = Path(root) / name
             rel = p.relative_to(dest).as_posix()
             if rel == MANIFEST_NAME or rel in _SIDECARS:
                 continue
-            state[rel] = _sha256_file(p)
+            f = by_path.get(rel)
+            state[rel] = f is not None and blob_matches(f, p.read_bytes())
     return state
 
 
