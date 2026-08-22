@@ -2,6 +2,13 @@
 
 All notable changes to `fontlab-www-toolkit` are documented here.
 
+## v1.0.12 — 2026-08-22
+
+### Fixed
+- `mirror`: strip *any* `<script>` Cloudflare injects into HTML (the Web
+  Analytics beacon from `static.cloudflareinsights.com` as well as the
+  `/cdn-cgi/` challenge script), not just the first variant seen.
+
 ## v1.0.11 — 2026-08-22
 
 ### Fixed

@@ -47,13 +47,13 @@ DIR_MODE = 0o755
 FILE_MODE = 0o644
 
 
-# Cloudflare (fronting fontlab.dev) appends a bot-detection <script> to every
-# text/html response when "JavaScript Detections" / Bot Fight Mode is on. It is
-# not part of the published file, so strip it before verifying the hash.
-_CF_INJECTED = re.compile(
-    rb"<script>\(function\(\)\{(?:(?!</script>).)*?(?:__CF\$cv\$params|/cdn-cgi/)(?:(?!</script>).)*?</script>",
-    re.DOTALL,
-)
+# Cloudflare (fronting fontlab.dev) appends scripts to every text/html
+# response: the bot-detection / JS-detection challenge (`__CF$cv$params`,
+# `/cdn-cgi/challenge-platform/...`) and the Web Analytics beacon
+# (`static.cloudflareinsights.com/beacon.min.js`). They are not part of the
+# published file, so strip them before verifying the hash.
+_SCRIPT_TAG = re.compile(rb"<script\b[^>]*>.*?</script>", re.DOTALL | re.IGNORECASE)
+_CDN_MARKERS = (b"__CF$cv$params", b"/cdn-cgi/", b"cloudflareinsights.com")
 _HTML_SUFFIXES = (".html", ".htm")
 
 
@@ -143,7 +143,9 @@ def _check_relative_path(path: str) -> None:
 
 def strip_cdn_injection(blob: bytes) -> bytes:
     """Remove CDN-injected scripts (Cloudflare challenge/JS-detection) from HTML."""
-    return _CF_INJECTED.sub(b"", blob)
+    return _SCRIPT_TAG.sub(
+        lambda m: b"" if any(k in m.group(0) for k in _CDN_MARKERS) else m.group(0), blob
+    )
 
 
 def verify_blob(f: ManifestFile, blob: bytes) -> bytes:

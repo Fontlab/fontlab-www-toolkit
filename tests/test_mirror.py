@@ -199,3 +199,13 @@ def test_mirror_when_umask_restrictive_then_web_readable_modes(tmp_path, monkeyp
     assert stat.S_IMODE((dest / "assets/app.js").stat().st_mode) == 0o644, (
         "files must be world-readable"
     )
+
+
+def test_strip_cdn_injection_when_beacon_script_then_removed_but_app_scripts_kept():
+    app = b'<script type="module" crossorigin src="./assets/index-abc.js"></script>'
+    beacon = (
+        b'<script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/v123" '
+        b'integrity="sha512-x" data-cf-beacon=\'{"rayId":"a","version":"2026.8.0","token":"t"}\' crossorigin="anonymous"></script>'
+    )
+    html = b"<html><head>" + app + b"</head><body>x" + beacon + b"</body></html>"
+    assert m.strip_cdn_injection(html) == b"<html><head>" + app + b"</head><body>x</body></html>"
