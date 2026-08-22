@@ -20,7 +20,7 @@ from fontlab_www_toolkit.builder import BuildPaths, SiteBuilder, setup_environme
 
 
 class Cli:
-    """Build, pull-webflow, convert-old, clean, or setup a FontLab site repo."""
+    """Build, pull-webflow, convert-old, clean, setup, or mirror a FontLab site."""
 
     def build(
         self,
@@ -90,6 +90,36 @@ class Cli:
         """Create / refresh a uv-managed venv for the admin pipeline."""
         _, paths = _builder(root)
         setup_environment(paths.root, Path(venv) if venv else None, clear=clear)
+
+    def mirror(
+        self,
+        manifest_url: str,
+        dest: str,
+        dry_run: bool = False,
+        timeout: float = 60.0,
+    ) -> None:
+        """Mirror a static site folder over HTTPS from its ``manifest.json``.
+
+        Used by api.fontlab.com/www-admin to republish e.g.
+        https://fontlab.dev/tth-debugger/alpha-sdx992/ into
+        studio.fontlab.com/public/tth-debugger/. Every file is verified
+        (size + SHA-256) and the destination folder is swapped atomically.
+
+        Args:
+            manifest_url: https URL of the producer's ``manifest.json``.
+            dest: destination folder (replaced on success).
+            dry_run: list what would change without writing.
+            timeout: per-request timeout in seconds.
+        """
+        from fontlab_www_toolkit.mirror import MirrorError, mirror
+
+        try:
+            res = mirror(manifest_url, Path(dest), dry_run=dry_run, timeout=timeout)
+        except MirrorError as e:
+            print(f"mirror failed: {e}", file=sys.stderr)
+            raise SystemExit(1) from e
+        if not dry_run:
+            print(f"Mirrored {res.manifest.name} {res.manifest.version} -> {res.dest}")
 
     def version(self) -> None:
         """Print the package version and exit."""

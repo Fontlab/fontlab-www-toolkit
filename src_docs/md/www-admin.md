@@ -45,6 +45,22 @@ shell_exec('uv run fontlab-www-toolkit build --skip_webflow 2>&1');
 shell_exec('uv run fontlab-www-toolkit pull-webflow 2>&1');
 ```
 
+## Publishing sites that build elsewhere (`mirror`)
+
+`studio.fontlab.com/tth-debugger` is built by `github.com/fontlab/tth-debugger`
+CI and published to GitHub Pages at
+`https://fontlab.dev/tth-debugger/alpha-sdx992/` together with a
+`manifest.json`. The admin republishes it with:
+
+```bash
+fontlab-www-toolkit mirror \
+  --manifest_url https://fontlab.dev/tth-debugger/alpha-sdx992/manifest.json \
+  --dest "$LIVE/studio.fontlab.com/public/tth-debugger"
+```
+
+See the README section "Mirroring a published static site" for the manifest
+schema.
+
 ## Environment variables
 
 | Variable | Description |

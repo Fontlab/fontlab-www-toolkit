@@ -32,9 +32,32 @@ Commands:
 | `convert-old` | Regenerate OLD pages from `src_docs/old-pages.yml`. |
 | `clean` | Delete `build_docs/` and `public/`. |
 | `setup [--venv PATH] [--clear]` | Create / refresh a uv venv for the admin pipeline. |
+| `mirror --manifest_url URL --dest DIR [--dry_run]` | Mirror a static site folder over HTTPS from its `manifest.json` (size + SHA-256 verified, atomic folder swap). |
 | `version` | Print the installed version. |
 
 All commands accept `--root PATH`; default is the current working directory.
+
+## Mirroring a published static site
+
+Some properties are not built by this toolkit but by their own CI — e.g. the
+TTH Debugger, whose GitHub Actions build lands in
+`https://fontlab.dev/tth-debugger/alpha-sdx992/`. Such a build exposes a
+`manifest.json` (`schema: fontlab-site-manifest/1`) listing every file with
+`path`, `size`, `sha256`, `type`, plus `name`, `version`, `commit`, `builtAt`,
+`baseUrl`, `entry`. `mirror` consumes that:
+
+```bash
+fontlab-www-toolkit mirror \
+  --manifest_url https://fontlab.dev/tth-debugger/alpha-sdx992/manifest.json \
+  --dest /path/to/live/studio.fontlab.com/public/tth-debugger
+```
+
+Files already present with a matching hash are reused; everything else is
+downloaded, verified, and the folder is swapped in with a rename so the live
+site never sees a half-written tree. Cloudflare's injected bot-detection
+`<script>` in HTML responses is stripped before verification. The manifest is
+saved into the destination as `manifest.json` for provenance. Standard library
+only — no extra dependencies in the admin venv.
 
 ## Site repo layout it expects
 

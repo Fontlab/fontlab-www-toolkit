@@ -2,6 +2,18 @@
 
 All notable changes to `fontlab-www-toolkit` are documented here.
 
+## v1.0.10 — 2026-08-22
+
+### Added
+- `mirror --manifest_url URL --dest DIR [--dry_run] [--timeout S]`: mirror a
+  static site folder over HTTPS from a `fontlab-site-manifest/1`
+  `manifest.json`. Verifies size + SHA-256 per file, reuses unchanged files,
+  swaps the destination folder in atomically, strips Cloudflare's injected
+  bot-detection `<script>` from HTML before verification. Used by
+  api.fontlab.com/www-admin to publish `studio.fontlab.com/tth-debugger`
+  from `https://fontlab.dev/tth-debugger/alpha-sdx992/`.
+- `fontlab_www_toolkit.mirror` module (stdlib only) with tests.
+
 ## v1.0.9 — 2026-08-19
 
 ### Changed
