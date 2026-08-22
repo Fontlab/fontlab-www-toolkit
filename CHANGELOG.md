@@ -2,6 +2,13 @@
 
 All notable changes to `fontlab-www-toolkit` are documented here.
 
+## v1.0.11 — 2026-08-22
+
+### Fixed
+- `mirror`: destination folder/files now get explicit `0755`/`0644` modes.
+  `mkdtemp()` creates `0700` and IONOS runs with umask `077`, so the first
+  live publish produced a tree Apache could not read (HTTP 403).
+
 ## v1.0.10 — 2026-08-22
 
 ### Added

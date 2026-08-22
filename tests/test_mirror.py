@@ -179,3 +179,23 @@ def test_mirror_when_html_injected_then_dest_has_clean_file(tmp_path, monkeypatc
     dest = tmp_path / "out"
     _patched_mirror(monkeypatch, fake, dest)
     assert (dest / "index.html").read_bytes() == site["index.html"]
+
+
+def test_mirror_when_umask_restrictive_then_web_readable_modes(tmp_path, monkeypatch, site):
+    import os
+    import stat
+
+    old = os.umask(0o077)
+    try:
+        fake = FakeFetch(site, _manifest(site))
+        dest = tmp_path / "out"
+        _patched_mirror(monkeypatch, fake, dest)
+    finally:
+        os.umask(old)
+    assert stat.S_IMODE(dest.stat().st_mode) == 0o755, (
+        "dest dir must be traversable by the web server"
+    )
+    assert stat.S_IMODE((dest / "assets").stat().st_mode) == 0o755
+    assert stat.S_IMODE((dest / "assets/app.js").stat().st_mode) == 0o644, (
+        "files must be world-readable"
+    )

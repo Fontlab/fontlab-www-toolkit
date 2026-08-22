@@ -43,6 +43,8 @@ SCHEMA = "fontlab-site-manifest/1"
 MANIFEST_NAME = "manifest.json"
 USER_AGENT = "fontlab-www-toolkit/mirror"
 _SIDECARS = ("files.txt", "SHA256SUMS")
+DIR_MODE = 0o755
+FILE_MODE = 0o644
 
 
 # Cloudflare (fronting fontlab.dev) appends a bot-detection <script> to every
@@ -236,9 +238,13 @@ def mirror(
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp_root = Path(tempfile.mkdtemp(prefix=f".{dest.name}.tmp-", dir=dest.parent))
     try:
+        # mkdtemp() creates 0700 and shared hosts often run with umask 077;
+        # the web server must be able to traverse and read the result.
+        os.chmod(tmp_root, DIR_MODE)
         for f in manifest.files:
             target = tmp_root / f.path
             target.parent.mkdir(parents=True, exist_ok=True)
+            _chmod_dirs_upto(target.parent, tmp_root)
             existing = dest / f.path
             if current.get(f.path) == f.sha256 and existing.is_file():
                 shutil.copy2(existing, target)
@@ -260,6 +266,7 @@ def mirror(
             except MirrorError:
                 pass
         _write_manifest_copy(tmp_root, manifest)
+        _fix_modes(tmp_root)
         _swap_in(tmp_root, dest)
     except BaseException:
         shutil.rmtree(tmp_root, ignore_errors=True)
@@ -283,6 +290,22 @@ def _current_state(dest: Path) -> dict[str, str]:
                 continue
             state[rel] = _sha256_file(p)
     return state
+
+
+def _chmod_dirs_upto(d: Path, stop: Path) -> None:
+    while d != stop and stop in d.parents:
+        os.chmod(d, DIR_MODE)
+        d = d.parent
+
+
+def _fix_modes(root: Path) -> None:
+    """World-readable files and traversable dirs, whatever the umask was."""
+    os.chmod(root, DIR_MODE)
+    for r, dirs, files in os.walk(root):
+        for n in dirs:
+            os.chmod(Path(r) / n, DIR_MODE)
+        for n in files:
+            os.chmod(Path(r) / n, FILE_MODE)
 
 
 def _write_manifest_copy(folder: Path, manifest: Manifest) -> None:
