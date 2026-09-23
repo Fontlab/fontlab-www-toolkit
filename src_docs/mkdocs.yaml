@@ -12,7 +12,7 @@ repo_name: Fontlab/fontlab-www-toolkit
 docs_dir: md
 
 theme:
-  name: material
+  name: materialx
   palette:
     - scheme: default
       primary: indigo
@@ -48,3 +48,11 @@ nav:
   - wf_cache structure: wf-cache.md
   - www-admin integration: www-admin.md
   - Style guide: STYLE_GUIDE.md
+
+extra_css:
+  - https://i.fontlab.com/fltheme26/1.0.0/components.css
+  - https://i.fontlab.com/fltheme26/1.0.0/theme.css
+
+extra_javascript:
+  - https://i.fontlab.com/fltheme26/1.0.0/basecoat.js
+  - https://i.fontlab.com/fltheme26/1.0.0/theme.js

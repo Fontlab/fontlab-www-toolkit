@@ -2,6 +2,11 @@
 
 All notable changes to `fontlab-www-toolkit` are documented here.
 
+## Unreleased
+
+- Load configured `theme_assets` in final HTML after Webflow and static overlays.
+  Preserve body bytes and existing asset tags; leave HTML fragments unchanged.
+
 ## v1.0.13 — 2026-08-22
 
 ### Added

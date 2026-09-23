@@ -37,6 +37,8 @@ from typing import ClassVar
 from bs4 import BeautifulSoup
 from markdownify import ATX, markdownify
 
+from .theme import theme_publish_tree
+
 
 @dataclass(frozen=True)
 class WebflowPage:
@@ -590,6 +592,7 @@ class SiteBuilder:
         self.run_static_builder()
         overlay_directory(self.paths.webflow_cache, self.paths.build_docs)
         overlay_directory(self.paths.static_docs, self.paths.build_docs)
+        theme_publish_tree(self.paths.build_docs, self.config.get("theme_assets", []))
         publish_directory(self.paths.build_docs, self.paths.public)
 
     def run_static_builder(self) -> None:

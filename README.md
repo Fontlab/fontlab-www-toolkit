@@ -61,6 +61,11 @@ only — no extra dependencies in the admin venv.
 
 ## Site repo layout it expects
 
+Sites can set `theme_assets` in `fontlab-www-toolkit.json` to a list of HTTPS
+CSS and JavaScript URLs. The builder adds missing links and deferred scripts
+after all Webflow/static overlays, so imported pages use the same shared theme
+as Markdown pages. Existing asset URLs are deduplicated. This is opt-in.
+
 ```
 site/
 ├── src_docs/
