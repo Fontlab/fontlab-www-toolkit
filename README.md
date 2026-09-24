@@ -1,3 +1,5 @@
+<!-- this_file: README.md -->
+
 
 # fontlab-www-toolkit
 
@@ -214,3 +216,13 @@ full documentation covering the four-layer build flow, Webflow stub format,
 ```
 
 Requires `UV_PUBLISH_TOKEN` (PyPI token) in the environment.
+
+<!-- shared-theme-integration:start -->
+## Shared FontLab theme integration
+
+This repository is part of the FontLab theme 2026 rollout: shared hybrid-site build pipeline.
+[THEME.md](THEME.md) documents its source/output boundaries, configuration,
+publication route, control ownership, shared visual changes and verification.
+Use the [public setup guide](https://i.fontlab.com/fltheme26/) and
+[MaterialX starter](https://i.fontlab.com/fltheme26/starter.zip) for new sites.
+<!-- shared-theme-integration:end -->
