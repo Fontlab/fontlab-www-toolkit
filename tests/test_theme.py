@@ -1,4 +1,4 @@
-"""Verify shared theme injection after Webflow/static overlays."""
+"""Verify shared theme injection after the static overlay."""
 
 # this_file: tests/test_theme.py
 import json
@@ -80,21 +80,20 @@ def test_inject_theme_assets_when_fragment_then_leaves_include_unchanged():
     )
 
 
-def test_build_when_static_overlay_replaces_webflow_then_themes_final_content(
+def test_build_when_static_overlay_replaces_rendered_page_then_themes_final_content(
     tmp_path: Path, monkeypatch
 ):
     paths = BuildPaths.from_root(tmp_path)
-    for folder in [paths.webflow_cache, paths.static_docs, paths.build_docs]:
+    for folder in [paths.static_docs, paths.build_docs]:
         folder.mkdir(parents=True)
     (tmp_path / "fontlab-www-toolkit.json").write_text(json.dumps({"theme_assets": ASSETS}))
     for folder, body in [
         (paths.build_docs, "Markdown"),
-        (paths.webflow_cache, "Webflow"),
         (paths.static_docs, "Static overlay"),
     ]:
         (folder / "index.html").write_text(f"<html><head></head><body>{body}</body></html>")
     builder = SiteBuilder(paths)
-    monkeypatch.setattr(builder, "run_static_builder", lambda: None)
+    monkeypatch.setattr(builder, "run_static_builder", lambda *, offline: None)
     builder.build(pull_webflow=False)
     final = (paths.public / "index.html").read_text()
     assert "Static overlay" in final, "Last overlay must retain precedence"

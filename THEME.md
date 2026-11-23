@@ -6,7 +6,7 @@ this_file: THEME.md
 
 ## Shared hybrid-site build pipeline
 
-The Python toolkit injects the shared assets into final HTML after Markdown generation, Webflow cache overlay and static-file overlay. Its own documentation is an internal consumer, not an independently configured Pages site.
+The Python toolkit injects the shared assets into final HTML after ProperDocs renders Markdown and imported pages and the toolkit overlays static files. Its own documentation is an internal consumer, not an independently configured Pages site.
 
 Ownership is chosen by each consumer. Preserve both global and MaterialX options; the main FontLab/Vexy hybrid sites explicitly select global controls.
 
@@ -22,11 +22,14 @@ Keep the final-output injection idempotent: one copy of each shared asset, in th
 
 ## Shared runtime contract
 
-The browser layer is published at `https://i.fontlab.com/fltheme26/1.0.0/`.
-Load CSS in this order: `components.css`, then `theme.css`. Load scripts in this
-order: `basecoat.js`, then `theme.js`. Do not duplicate bundles or edit generated
-CDN CSS locally. The four assets are shared across consumers; compatible fixes
-are currently published in place under `1.0.0/`, not as immutable snapshots.
+Sites on the fly-january theme inject
+`https://fontlab.dev/fontlab-www-docstheme/fly/latest/fly.css` and
+`https://fontlab.dev/fontlab-www-docstheme/fly/latest/fly.js` into imported
+pages using the toolkit’s `theme_assets`. Imported Webflow pages carry their
+own global header and footer. For Markdown pages, set `extra.fly.chrome` to
+`fontlab`, `vexy` or `none` in the site configuration.
+
+### MaterialX sites
 
 Keep `theme.name: materialx`, native navigation/search markup, the search plugin,
 and generated `search/search_index.json`. The shared bridge defaults documentation
@@ -84,8 +87,8 @@ without also adopting and testing its companion template and theme controls.
 For a shared CSS/runtime fix, change `fontlab-www-docstheme`, build it, run its
 relevant tests, stage the CDN, push, wait for Pages, and verify live asset hashes.
 For a site-specific config/template change, use this repository’s native build and
-publish route, then inspect its final output. Cached Webflow/static overlays can
-replace intermediate HTML, so checking a MkDocs build alone is insufficient.
+publish route, then inspect its final output. The static overlay can
+replace rendered or imported HTML, so checking a MkDocs build alone is insufficient.
 
 Check desktop and mobile, light and dark, local/global ownership, drawer/search
 open-close-focus behavior, key navigation and at least one component interaction.

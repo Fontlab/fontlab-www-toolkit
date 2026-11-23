@@ -9,18 +9,18 @@ FontLab web properties (`www.fontlab.com`, `www.vexy.art`, and the
 
 ## Install
 
-```bash
-uv add fontlab-www-toolkit          # in a project
-uvx fontlab-www-toolkit --help      # one-shot
-pip install fontlab-www-toolkit
-```
+On the `fly-january` branch, run `uv sync` in this checkout. Until
+`vexy-mkdocs-page-import` is on PyPI, uv installs it from the editable path in
+`pyproject.toml`. On another machine, point that path at its local checkout.
+Install the plugin in the environment that runs ProperDocs if the site uses a
+custom build command.
 
 ## CLI
 
 Three equivalent ways to invoke it:
 
 ```bash
-fontlab-www-toolkit COMMAND        # console script (works under uvx too)
+fontlab-www-toolkit COMMAND        # installed console script
 fontlab-build       COMMAND        # backwards-compat alias
 python -m fontlab_www_toolkit COMMAND
 ```
@@ -29,8 +29,8 @@ Commands:
 
 | Command | Effect |
 |---|---|
-| `build [--skip_webflow] [--update_stubs]` | Pull Webflow stubs, build with MkDocs/ProperDocs, overlay `wf_cache/` + `static_docs/`, publish to `public/`. |
-| `pull-webflow [--update_stubs]` | Refresh `wf_cache/` only. |
+| `build [--skip_webflow] [--update_stubs]` | Build with `page-import`, overlay `static_docs/`, inject theme assets and publish to `public/`. |
+| `pull-webflow [--update_stubs]` | Refresh the URL cache without building. Optionally rewrite stub bodies. |
 | `convert-old` | Regenerate OLD pages from `src_docs/old-pages.yml`. |
 | `clean` | Delete `build_docs/` and `public/`. |
 | `setup [--venv PATH] [--clear]` | Create / refresh a uv venv for the admin pipeline. |
@@ -63,115 +63,109 @@ only — no extra dependencies in the admin venv.
 
 ## Site repo layout it expects
 
-Sites can set `theme_assets` in `fontlab-www-toolkit.json` to a list of HTTPS
-CSS and JavaScript URLs. The builder adds missing links and deferred scripts
-after all Webflow/static overlays, so imported pages use the same shared theme
-as Markdown pages. Existing asset URLs are deduplicated. This is opt-in.
-
 ```
 site/
 ├── src_docs/
 │   ├── mkdocs.yml
-│   ├── md/                   # Markdown sources (+ Webflow stubs via frontmatter)
-│   └── old-pages.yml         # OPTIONAL — one-time HTML → MD conversions
-├── static_docs/              # Copied verbatim over build_docs/ during overlay
-├── wf_cache/                 # Generated — Webflow snapshots
-├── build_docs/               # Generated — MkDocs output
-└── public/                   # Generated — final publish tree
+│   ├── md/                   # Markdown pages and import stubs
+│   └── old-pages.yml         # Optional legacy HTML → Markdown mappings
+├── static_docs/              # Overrides files at matching build paths
+├── wf_cache/                 # Source HTML, one file per URL hash
+├── build_docs/               # Generated site with overlays and theme assets
+└── public/                   # Final local publish tree
 ```
 
-A Webflow stub is any Markdown file with frontmatter:
+ProperDocs renders Markdown for navigation and search. During that build,
+`page-import` places imported HTML at each stub’s normal output path.
+The toolkit then copies `static_docs/` over the result, injects configured
+`theme_assets` into the final HTML, and copies the built names into `public/`.
 
-```yaml
----
-title: Page
-webflow-import-url: https://example.webflow.io/page
----
-```
+## Migrate a site to page-import
 
-### Refreshing stub bodies (`--update_stubs`)
+1. Add `page-import` to the existing plugins in `src_docs/mkdocs.yml`. Keep
+   `search` if the site indexes Markdown. Move the contents of the site's JSON
+   `cloudinary` block under `webflow.cloudinary` in this configuration.
 
-Normally only `wf_cache/` is refreshed; the stub Markdown body stays as a
-placeholder (the cached HTML overlays it at build time). Pass `--update_stubs`
-to `pull-webflow` or `build` to also rewrite each stub's **body** from the
-freshly cached HTML, while preserving the stub's **frontmatter** verbatim:
+   ```yaml
+   plugins:
+     - search
+     - page-import:
+         offline: !ENV [PAGE_IMPORT_OFFLINE, false]
+         on_offline_miss: !ENV [PAGE_IMPORT_ON_MISS, error]
+         cache_dir: ../wf_cache
+         webflow:
+           cloudinary:
+             cl_cloud: fontlab
+             cl_map:
+               "https://cdn.example.org/media": assets
+   ```
 
-```bash
-fontlab-www-toolkit pull-webflow --update_stubs
-```
+   Use your existing Cloudinary values, or omit `cloudinary` if unused.
+   Move `split_google_fonts` and `rocket_loader_optout` under `webflow` too.
+   Rename `webflow_badge_hide_css` to `webflow.badge_hide_css`. The plugin
+   supplies its own HTTP user agent.
 
-For each stub it strips non-prose noise (`<script>`/`<style>`/`<noscript>` and
-hidden Webflow *Windflow* plugin metadata), serves the cleaned cached HTML over
-a loopback HTTP server, and runs [`url22md`](https://github.com/twardoch/url22md)
-to extract Markdown. This requires the `url22md` CLI on `PATH` (or set
-`url22md_bin` in config); it is an external runtime tool, not a packaged
-dependency.
+2. Remove `cloudinary` and `frontmatter_key` from `fontlab-www-toolkit.json`.
+   The toolkit warns about either setting. Replace any custom stub key with one
+   of the plugin’s fixed keys. Choose `webflow-import-url` for Webflow
+   processing, `import-url` for other remote HTML, or `copy-file` for a local
+   export relative to the site configuration.
 
-## Configuration
+   ```yaml
+   ---
+   title: Product page
+   webflow-import-url: https://example.webflow.io/product
+   ---
+   ```
 
-You can customize the builder's behavior using a JSON configuration file (by default `fontlab-www-toolkit.json` in the root directory, or passed via `--config` CLI option). Alternatively, individual pages can specify page-specific overrides inside the input HTML:
+3. Run `fontlab-www-toolkit pull-webflow` or an online `build` before the first
+   offline build. The plugin reads raw source HTML from
+   `wf_cache/<sha256-of-url>.html`. It ignores old
+   `wf_cache/<public-path>/index.html` files. Webflow processing runs when the
+   plugin renders the imported page, including on cache hits.
 
-```html
-<head>
-  <script id="fontlab-toolkit-config" type="application/json">
-  {
-    "cloudinary": {
-      "cl_responsive": {
-        "methodology": "legacy"
-      }
-    }
-  }
-  </script>
-</head>
-```
+### Offline builds and stub bodies
 
-### Global Overrides
+`build --skip_webflow` sets `PAGE_IMPORT_OFFLINE=true` and
+`PAGE_IMPORT_ON_MISS=keep` for the static build. The plugin uses cached URL
+imports and keeps rendered Markdown on a miss. An ordinary build sets
+`PAGE_IMPORT_OFFLINE=false` and respects the plugin’s `refresh` setting.
+`pull-webflow` explicitly refreshes both URL import types.
 
-The following settings can be overridden in the root configuration object:
+Pass `--update_stubs` to `pull-webflow` or `build` to rewrite URL stub bodies
+from cached HTML. The toolkit preserves the front matter, strips scripts,
+styles and hidden Windflow metadata, and serves the cleaned HTML over loopback
+to the external `url22md` executable. If a build changes a stub body, it
+renders again from cache so the published search index contains the new text.
+As before, `--skip_webflow` also skips the optional stub rewrite.
 
-* **`frontmatter_key`** (string): The YAML frontmatter key used to identify Webflow URLs. Defaults to `"webflow-import-url"`.
-* **`webflow_badge_hide_css`** (string): CSS injected to hide the Webflow badge.
-* **`old_pages_config`** (string): Path to the legacy pages mapping file. Defaults to `"src_docs/old-pages.yml"`.
-* **`mkdocs_command`** (string | array): The custom build command for MkDocs/ProperDocs. Can include the `{config_file}` placeholder.
-* **`user_agent`** (string): Custom User-Agent header used when pulling Webflow pages. Defaults to `"fontlab_www_toolkit"`.
-* **`split_google_fonts`** (bool): When true (default), split a multi-family `fonts.googleapis.com/css2?family=A&family=B&…` link into one `?family=X&display=swap` link per family. This keeps web fonts loading even if a downstream step truncates the served URL at the first `&` (otherwise only the first family loads and the rest fall back to a system font).
-* **`url22md_bin`** (string): Path to the `url22md` executable used by `--update_stubs`. Defaults to whatever is found on `PATH`.
-* **`url22md_tool`** (int | null): Forces a specific `url22md` extraction engine (`1`=trafilatura, `3`=readability, …). Defaults to `1` for offline, deterministic extraction; set to `null` to let url22md run its full fallback chain (may reach cloud tools).
-* **`url22md_timeout`** (int): Per-page extraction timeout in seconds. Defaults to `60`.
+### Toolkit configuration
 
-### Cloudinary Options
+Set these options in `fontlab-www-toolkit.json` at the site root or pass
+`--config PATH` to `build` or `pull-webflow`.
 
-The `cloudinary` block allows automatic mapping of image URLs to Cloudinary and setup of responsive client-side loading:
+| Setting | Effect |
+|---|---|
+| `theme_assets` | Ordered list of HTTPS CSS and JavaScript URLs. Missing asset tags are added after the static overlay. |
+| `mkdocs_command` | Custom build command (string or list). Use `{config_file}` for the site configuration path. |
+| `old_pages_config` | Legacy HTML conversion mapping. Defaults to `src_docs/old-pages.yml`. |
+| `url22md_bin` | Extraction executable. Defaults to `url22md` on `PATH`. |
+| `url22md_tool` | Extraction engine. Defaults to `1` for local extraction. A value of `null` allows the tool's full fallback chain, including cloud tools. |
+| `url22md_timeout` | Extraction timeout in seconds. Defaults to `60`. |
+
+Sites on the fly-january theme use these assets for imported pages:
 
 ```json
 {
-  "cloudinary": {
-    "cl_cloud": "mycloud",
-    "cl_map": {
-      "https://cdn.example-files.com/assets": "assets_prefix",
-      "https://images.example.com": "images_prefix"
-    },
-    "cl_trans": "c_limit,w_auto/f_auto,q_auto,dpr_auto/",
-    "cl_responsive": {
-      "cl_trans_thumb": "c_limit,w_128/f_auto,q_1/",
-      "cl_core_js": "https://unpkg.com/cloudinary-core@latest",
-      "methodology": "modern"
-    }
-  }
+  "theme_assets": [
+    "https://fontlab.dev/fontlab-www-docstheme/fly/latest/fly.css",
+    "https://fontlab.dev/fontlab-www-docstheme/fly/latest/fly.js"
+  ]
 }
 ```
 
-* **`cl_cloud`**: Cloudinary cloud name.
-* **`cl_map`**: Map of source URL prefixes to Cloudinary upload folder prefixes. Any matching image URLs found in attributes (like `src`, `href`, `style` background-image) will be replaced.
-* **`cl_trans`**: The default Cloudinary image transformation string.
-* **`cl_responsive`**: (Optional) Enables responsive client-side images:
-  * Adds `class="cld-responsive"` to matching `<img>` elements.
-  * Sets the `src` attribute to a thumbnail transformation (using `cl_trans_thumb`).
-  * Sets the `data-src` attribute to the main transformation (using `cl_trans`).
-  * Clears `srcset` to avoid browser conflict.
-  * Injects responsive initialization scripts before the closing `</body>` tag:
-    * **`methodology: "modern"`** (Recommended): Injects a lightweight vanilla JS script using `ResizeObserver` to update image source dynamically, avoiding heavy external library dependencies.
-    * **`methodology: "legacy"`**: Injects the `cloudinary-core` library (`cl_core_js`) and invokes `cl.responsive()`.
+Imported Webflow pages carry their own global header and footer. For Markdown
+pages, set `extra.fly.chrome` in `mkdocs.yml` to `fontlab`, `vexy`, or `none`.
 
 ## Deploy helpers (library use)
 

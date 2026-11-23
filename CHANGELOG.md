@@ -2,6 +2,17 @@
 
 All notable changes to `fontlab-www-toolkit` are documented here.
 
+## Unreleased
+
+- ProperDocs now imports pages during rendering with `vexy-mkdocs-page-import`.
+  The toolkit overlays static files, then injects theme assets before publishing.
+- `--skip_webflow` uses cached URL imports and keeps rendered Markdown on a miss.
+  `pull-webflow` refreshes the plugin’s URL-hashed cache. `--update_stubs`
+  extracts Markdown from cached source HTML and preserves the original front matter.
+- Enable `page-import` in `src_docs/mkdocs.yml`, move Cloudinary settings to
+  `page-import.webflow.cloudinary`, and replace custom front-matter keys. An
+  online pull or build populates the new cache layout for offline use.
+
 ## v1.0.14 — 2026-09-23
 
 - Load configured `theme_assets` in final HTML after Webflow and static overlays.

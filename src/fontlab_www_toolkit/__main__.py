@@ -29,12 +29,12 @@ class Cli:
         update_stubs: bool = False,
         config: str | None = None,
     ) -> None:
-        """Full build: pull Webflow (unless skipped), build, overlay, publish.
+        """Build with page-import, overlay static files, apply theme assets and publish.
 
         Args:
             root: site repo root; defaults to the current working directory.
-            skip_webflow: if true, do not refresh ``wf_cache/`` before building.
-            update_stubs: if true, rewrite each Webflow stub's body from the
+            skip_webflow: use cached URL imports, render stubs on a miss and skip stub rewrites.
+            update_stubs: if true, rewrite each URL stub's body from the
                 cached HTML (via url22md), preserving the original frontmatter.
             config: path to the JSON configuration file.
         """
@@ -48,17 +48,17 @@ class Cli:
         update_stubs: bool = False,
         config: str | None = None,
     ) -> None:
-        """Refresh ``wf_cache/`` only.
+        """Refresh the configured page-import cache without building.
 
         Args:
             root: site repo root; defaults to the current working directory.
-            update_stubs: if true, rewrite each Webflow stub's body from the
+            update_stubs: if true, rewrite each URL stub's body from the
                 cached HTML (via url22md), preserving the original frontmatter.
             config: path to the JSON configuration file.
         """
         builder, paths = _builder(root, config=config)
         for path in builder.pull_webflow(update_stubs=update_stubs):
-            print(path.relative_to(paths.root))
+            print(path.relative_to(paths.root) if path.is_relative_to(paths.root) else path)
 
     def convert_old(self, root: str | None = None, config: str | None = None) -> None:
         """Regenerate OLD pages from ``src_docs/old-pages.yml``.

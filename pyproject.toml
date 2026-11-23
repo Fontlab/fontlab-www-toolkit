@@ -18,11 +18,13 @@ classifiers = [
   "Topic :: Software Development :: Build Tools",
 ]
 dependencies = [
+  "beautifulsoup4",
   "fire>=0.7.0",
   "markdownify>=1.2.2",
   "mkdocs>=1.6.1",
   "mkdocs-materialx>=10.1.4",
   "properdocs>=1.6.7",
+  "vexy-mkdocs-page-import",
 ]
 dynamic = ["version"]
 
@@ -42,6 +44,9 @@ Source   = "https://github.com/Fontlab/fontlab-www-toolkit"
 fontlab-www-toolkit = "fontlab_www_toolkit.__main__:main"
 # Backwards-compatible alias used by per-site build wrappers.
 fontlab-build       = "fontlab_www_toolkit.__main__:main"
+
+[tool.uv.sources]
+vexy-mkdocs-page-import = { path = "/Users/adam/Developer/vcs3/github.vexyart/vexy-mkdocs-page-import", editable = true }
 
 [build-system]
 requires = ["hatch-vcs>=0.4.0", "hatchling>=1.27.0"]

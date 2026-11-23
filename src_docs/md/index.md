@@ -14,7 +14,6 @@ FontLab web properties.
 ## Quick start
 
 ```bash
-pip install fontlab-www-toolkit          # or: uv add fontlab-www-toolkit
 fontlab-www-toolkit build                # full build in site repo root
 fontlab-www-toolkit build --skip_webflow # build without hitting Webflow network
 ```
@@ -24,9 +23,9 @@ fontlab-www-toolkit build --skip_webflow # build without hitting Webflow network
 The toolkit follows a **four-layer build flow** (see [Build flow](build-flow.md)):
 
 ```
-ProperDocs build (src_docs/ → build_docs/)
-    ↓  overlay Webflow pages (wf_cache/ → build_docs/)
+ProperDocs build with page-import (src_docs/ → build_docs/)
     ↓  overlay static files (static_docs/ → build_docs/)
+    ↓  inject configured theme_assets into final HTML
     ↓  publish (build_docs/ → public/)
 ```
 

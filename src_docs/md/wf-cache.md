@@ -1,74 +1,29 @@
-# wf_cache/ structure and static_docs/ overlay
+# URL cache and static overlay
 
-## wf_cache/
+With `cache_dir: ../wf_cache` in `src_docs/mkdocs.yml`, each URL import has
+one raw HTML file at `wf_cache/<sha256-of-url>.html`. Stubs importing the
+same URL share an entry. An online pull or build populates this cache during
+migration. Old `wf_cache/<public-path>/index.html` files are ignored.
 
-`wf_cache/` is the local mirror of Webflow-hosted page HTML.  It is populated
-by `fontlab-www-toolkit pull-webflow` and consumed during `build` (Layer 2).
-
-### Directory layout
-
-```
-wf_cache/
-├── index.html                    # home page (src_docs/md/index.md stub)
-├── font-editor/
-│   └── fontlab/
-│       └── index.html            # /font-editor/fontlab/ stub
-├── lines/
-│   └── index.html                # /lines/ stub
-└── font-converter/
-    └── transtype/
-        └── index.html            # /font-converter/transtype/ stub
-```
-
-Each cached file mirrors the directory structure of the stub's public URL.
-The path `wf_cache/{url_path}/index.html` corresponds to the Webflow page at
-the public URL `/{url_path}/`.
-
-### Lifecycle
-
-| Command | Effect on wf_cache/ |
+| Command | Effect |
 |---|---|
-| `pull-webflow` | Fetches all Webflow stub URLs; writes/overwrites `wf_cache/` |
-| `pull-webflow --update_stubs` | Also rewrites stub bodies from the fresh cache |
-| `build` | Reads `wf_cache/` and overlays into `build_docs/` |
-| `build --skip_webflow` | Uses existing `wf_cache/` without any network fetch |
-| `clean` | Does **not** delete `wf_cache/` (only deletes `build_docs/` and `public/`) |
+| `pull-webflow` | Refresh cached sources for `import-url` and `webflow-import-url` stubs. |
+| `pull-webflow --update_stubs` | Also rewrite URL stub bodies from the cached sources. |
+| `build` | The plugin fetches URL imports during rendering according to its `refresh` setting. |
+| `build --skip_webflow` | The plugin uses cached sources and keeps stub output on a miss. |
+| `clean` | Remove build output and matching published names while preserving the cache. |
 
-### Post-processing applied at build time
-
-When a cached HTML file is overlaid onto `build_docs/`, it passes through
-`SiteBuilder.process_page_html`:
-
-1. **Badge removal** — strips the `<a class="w-webflow-badge">` DOM node and
-   injects a `display:none` CSS rule as a belt-and-suspenders measure.
-2. **Google Fonts splitting** — a multi-family `?family=A&family=B` link is
-   split into one `?family=X&display=swap` link per family, preventing
-   downstream URL truncation from silently dropping fonts.
-3. **Cloudinary mapping** — image `src` / CSS `background-image` URLs that
-   match a configured prefix are rewritten to `res.cloudinary.com/…` URLs with
-   responsive transforms.  Configured in the JSON config under `"cloudinary"`.
-4. **Rocket Loader opt-out** — `data-cfasync="false"` is added to every
-   executable `<script>` tag (type `""`, `"text/javascript"`, or `"module"`),
-   preserving native in-order execution when Cloudflare Rocket Loader is
-   enabled on the zone.
-
-### Gitignore
-
-`wf_cache/` is typically gitignored in consumer repos because it is regenerated
-from Webflow on demand.  The `--skip_webflow` flag enables builds in CI without
-network access to Webflow.
-
----
+The plugin applies Webflow processing at render time. Move Cloudinary settings
+to `page-import.webflow.cloudinary` in the site's MkDocs configuration.
 
 ## static_docs/ overlay {#static_docs-overlay}
 
-`static_docs/` is a verbatim file overlay applied after the Webflow cache
-overlay (Layer 3 in the build flow).  Files here win over everything — they are
-copied exactly as-is with no post-processing.
+`static_docs/` overlays the rendered and imported pages. The toolkit then
+injects any configured theme assets into the final HTML.
 
 ### Use cases
 
-- Prebuilt third-party HTML pages that must not be touched.
+- Prebuilt third-party HTML pages.
 - Legacy redirect pages with custom `<meta http-equiv="refresh">` tags.
 - Root-level assets: `robots.txt`, `sitemap.xml`, `favicon.ico`.
 - JavaScript or CSS files that must not be processed by ProperDocs.

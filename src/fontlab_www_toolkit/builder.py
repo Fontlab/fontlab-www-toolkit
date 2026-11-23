@@ -20,6 +20,7 @@ from __future__ import annotations
 import functools
 import http.server
 import json
+import logging
 import os
 import re
 import shlex
@@ -29,13 +30,16 @@ import subprocess
 import sys
 import tempfile
 import threading
-import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import ClassVar
 
 from bs4 import BeautifulSoup
 from markdownify import ATX, markdownify
+from mkdocs.config.config_options import Plugins
+from mkdocs.config.defaults import MkDocsConfig
+from mkdocs.utils.meta import get_data
+from vexy_mkdocs_page_import import cache_path, import_keys, read_cached
+from vexy_mkdocs_page_import.fetch import fetch
 
 from .theme import theme_publish_tree
 
@@ -45,7 +49,6 @@ class WebflowPage:
     """A Markdown placeholder linked to a Webflow import URL."""
 
     markdown_path: Path
-    public_path: str
     import_url: str
     cache_path: Path
 
@@ -66,7 +69,6 @@ class BuildPaths:
     src_docs: Path
     markdown: Path
     static_docs: Path
-    webflow_cache: Path
     build_docs: Path
     public: Path
     old_pages_config: Path
@@ -79,7 +81,6 @@ class BuildPaths:
             src_docs=repo / "src_docs",
             markdown=repo / "src_docs" / "md",
             static_docs=repo / "static_docs",
-            webflow_cache=repo / "wf_cache",
             build_docs=repo / "build_docs",
             public=repo / "public",
             old_pages_config=repo / "src_docs" / "old-pages.yml",
@@ -88,8 +89,6 @@ class BuildPaths:
 
 class SiteBuilder:
     """High-level operations used by local scripts and the PHP admin."""
-
-    frontmatter_key: ClassVar[str] = "webflow-import-url"
 
     def __init__(self, paths: BuildPaths, config_path: str | Path | None = None) -> None:
         self.paths = paths
@@ -103,6 +102,12 @@ class SiteBuilder:
             default_config = self.paths.root / "fontlab-www-toolkit.json"
             if default_config.exists():
                 self.config = json.loads(default_config.read_text(encoding="utf-8"))
+
+        log = logging.getLogger(__name__)
+        if "cloudinary" in self.config:
+            log.warning("Move cloudinary to page-import.webflow.cloudinary in src_docs/mkdocs.yml")
+        if "frontmatter_key" in self.config:
+            log.warning("frontmatter_key is ignored. Use the fixed page-import front-matter keys.")
 
     def load_old_pages(self) -> OldPageMapping | None:
         config_path_str = self.config.get("old_pages_config")
@@ -121,452 +126,77 @@ class SiteBuilder:
         old_public = (self.paths.root / old_public_raw).resolve()
         return OldPageMapping(old_public=old_public, pages=pages)
 
-    def discover_webflow_pages(self) -> list[WebflowPage]:
-        pages: list[WebflowPage] = []
-        if not self.paths.markdown.exists():
-            return pages
-        frontmatter_key = self.config.get("frontmatter_key", self.frontmatter_key)
-        for markdown_path in sorted(self.paths.markdown.rglob("*.md")):
-            meta = parse_frontmatter(markdown_path.read_text(encoding="utf-8"))
-            import_url = meta.get(frontmatter_key)
-            if not import_url:
-                continue
-            public_path = markdown_to_public_path(markdown_path, self.paths.markdown)
-            pages.append(
-                WebflowPage(
-                    markdown_path=markdown_path,
-                    public_path=public_path,
-                    import_url=import_url,
-                    cache_path=self.paths.webflow_cache / public_path.strip("/") / "index.html",
-                )
-            )
-        return pages
-
-    def process_page_html(self, html: str) -> str:
-        # 1. Parse inline config from HTML if present
-        page_config = {}
-        try:
-            soup_temp = BeautifulSoup(html, "html.parser")
-            script = soup_temp.find("script", id="fontlab-toolkit-config", type="application/json")
-            if script and script.string:  # type: ignore[union-attr]
-                page_config = json.loads(script.string.strip())  # type: ignore[union-attr]
-        except Exception:
-            pass
-
-        # 2. Merge configs: page_config overrides self.config
-        effective_config = {}
-        effective_config.update(self.config)
-        if "cloudinary" in self.config and "cloudinary" in page_config:
-            merged_cloudinary = {}
-            merged_cloudinary.update(self.config["cloudinary"])
-            merged_cloudinary.update(page_config["cloudinary"])
-            effective_config["cloudinary"] = merged_cloudinary
-        elif "cloudinary" in page_config:
-            effective_config["cloudinary"] = page_config["cloudinary"]
-
-        for k, v in page_config.items():
-            if k != "cloudinary":
-                effective_config[k] = v
-
-        # 3. Clean Webflow HTML badge and inject hiding CSS
-        hide_css = effective_config.get("webflow_badge_hide_css", WEBFLOW_BADGE_HIDE_CSS)
-        html = inject_badge_hiding_css(strip_webflow_badge(html), hide_css=hide_css)
-
-        # 4. Split multi-family Google Fonts links into one link per family, so a
-        #    downstream step that truncates the URL at the first '&' can't drop
-        #    fonts (a single ?family=X load still works without &display=swap).
-        if effective_config.get("split_google_fonts", True):
-            html = split_google_fonts_links(html)
-
-        # 5. Cloudinary replacements & responsive images
-        cloudinary_conf = effective_config.get("cloudinary")
-        if cloudinary_conf:
-            html = self.process_html_cloudinary(html, cloudinary_conf)
-
-        # 6. Opt every executable <script> out of Cloudflare Rocket Loader.
-        #    Rocket Loader (enabled on the deployed zone) rewrites script types
-        #    to defer/reorder execution and cannot run ES modules, which breaks
-        #    scroll interactions and module web components on the live site even
-        #    though the no-Cloudflare staging host runs the same HTML fine.
-        #    data-cfasync="false" restores native, in-order execution. Harmless
-        #    no-op where Rocket Loader is disabled.
-        if effective_config.get("rocket_loader_optout", True):
-            html = exempt_scripts_from_rocket_loader(html)
-
-        return html
-
-    def process_html_cloudinary(self, html: str, cloudinary_conf: dict) -> str:
-        cl_cloud = cloudinary_conf.get("cl_cloud", "fontlab")
-        cl_map = cloudinary_conf.get("cl_map", {})
-        if not cl_map:
-            return html
-
-        cl_trans = cloudinary_conf.get("cl_trans", "c_limit,w_auto/f_auto,q_auto,dpr_auto/")
-
-        # SVG images skip the responsive width chain entirely — vector art has no
-        # pixel width to optimise, so `w_auto`/`dpr_auto` are meaningless. They get
-        # a minimal `f_svg,q_auto` transform instead. `cl_trans_static` is the
-        # non-responsive fallback used for images the author opts out of the
-        # responsive script (see ``data-cld-responsive="false"`` below).
-        cl_trans_svg = cloudinary_conf.get("cl_trans_svg", "f_svg,q_auto")
-        cl_trans_static = cloudinary_conf.get("cl_trans_static", "f_auto,q_auto")
-
-        _cl_resp_raw = cloudinary_conf.get("cl_responsive")
-        cl_responsive_enabled = bool(_cl_resp_raw)
-        # Normalise to a plain dict so mypy can narrow .get() calls below.
-        # When disabled, cl_responsive is {} (never read); when enabled it is
-        # either the caller-supplied dict or {} (truthy non-dict coerced here).
-        cl_responsive: dict = _cl_resp_raw if isinstance(_cl_resp_raw, dict) else {}
-
-        if cl_responsive_enabled:
-            cl_trans_thumb = cl_responsive.get("cl_trans_thumb", "c_limit,w_128/f_auto,q_1/")
-            methodology = cl_responsive.get("methodology", "modern")
-        else:
-            cl_trans_thumb = ""
-            methodology = ""
-
-        # Extract lazyload, placeholder, and accessibility settings
-        lazyload = (
-            cl_responsive.get("lazyload")
-            if cl_responsive_enabled
-            else cloudinary_conf.get("lazyload")
-        )
-        placeholder = (
-            cl_responsive.get("placeholder")
-            if cl_responsive_enabled
-            else cloudinary_conf.get("placeholder")
-        )
-        accessibility = (
-            cl_responsive.get("accessibility")
-            if cl_responsive_enabled
-            else cloudinary_conf.get("accessibility")
-        )
-
-        # Determine effective lazyload setting
-        effective_lazyload = "false"
-        if lazyload is True:
-            effective_lazyload = "observer" if methodology == "modern" else "native"
-        elif isinstance(lazyload, str):
-            effective_lazyload = lazyload.lower()
-
-        # Determine effective placeholder setting
-        placeholder_mapping = {
-            "blur": "e_blur:2000,f_auto,q_auto:low",
-            "pixelate": "e_pixelate:100,f_auto,q_auto:low",
-            "vectorize": "e_vectorize,f_auto,q_auto:low",
-            "predominant": "c_fill,w_1,h_1/f_auto,q_auto:low",
-            "predominant-color": "c_fill,w_1,h_1/f_auto,q_auto:low",
-        }
-
-        placeholder_trans = ""
-        use_blank_placeholder = False
-
-        if placeholder is False:
-            use_blank_placeholder = True
-        elif isinstance(placeholder, str):
-            placeholder_trans = placeholder_mapping.get(placeholder.lower(), placeholder)
-        else:
-            placeholder_trans = cl_trans_thumb if cl_trans_thumb else "c_limit,w_128/f_auto,q_1/"
-
-        # Determine effective accessibility setting
-        accessibility_mapping = {
-            "colorblind": "e_assist_colorblind",
-            "monochrome": "e_grayscale",
-            "darkmode": "e_brightness_hsb:-30",
-            "brightmode": "e_brightness_hsb:30",
-        }
-        accessibility_trans = ""
-        if isinstance(accessibility, str):
-            accessibility_trans = accessibility_mapping.get(accessibility.lower(), accessibility)
-
-        # Prepare accessibility suffix
-        acc_suffix = ""
-        if accessibility_trans:
-            acc_suffix = accessibility_trans
-            if not acc_suffix.endswith("/"):
-                acc_suffix += "/"
-
-        # Construct effective transformations
-        effective_cl_trans = cl_trans
-        if acc_suffix:
-            if not effective_cl_trans.endswith("/"):
-                effective_cl_trans += "/"
-            effective_cl_trans += acc_suffix
-
-        effective_placeholder_trans = placeholder_trans
-        if acc_suffix and effective_placeholder_trans:
-            if not effective_placeholder_trans.endswith("/"):
-                effective_placeholder_trans += "/"
-            effective_placeholder_trans += acc_suffix
-
-        soup = BeautifulSoup(html, "html.parser")
-
-        # Iterate over all tags in the document (except script)
-        for tag in soup.find_all(True):
-            if tag.name == "script":
-                continue
-
-            # 1. Process <img> tags specifically if responsive is enabled
-            if tag.name == "img" and tag.get("src"):
-                src_val = tag["src"]
-                matched_prefix = None
-                for prefix in cl_map:
-                    if src_val.startswith(prefix):
-                        matched_prefix = prefix
-                        break
-
-                if matched_prefix:
-                    # SVGs, images opted out via data-cld-responsive="false", and
-                    # all images when responsive mode is off get a plain static
-                    # URL and stay out of the responsive class/script: the script
-                    # only ever touches img.cld-responsive, so omitting the class
-                    # is the compliant way to exclude an image.
-                    is_svg = is_svg_url(src_val)
-                    opt_out = str(tag.get("data-cld-responsive", "")).strip().lower() == "false"
-                    if is_svg or opt_out or not cl_responsive_enabled:
-                        static_trans = (
-                            cl_trans_svg
-                            if is_svg
-                            else cl_trans_static
-                            if opt_out
-                            else effective_cl_trans
-                        )
-                        tag["src"] = map_cloudinary_url(
-                            src_val, cl_cloud, cl_map, static_trans, svg_trans=cl_trans_svg
-                        )
-                        if tag.get("srcset"):
-                            del tag["srcset"]
-                        if effective_lazyload in ("true", "native", "observer"):
-                            tag["loading"] = "lazy"
-                        continue
-
-                    # Clear srcset to avoid conflict
-                    if tag.get("srcset"):
-                        del tag["srcset"]
-                    # Add class cld-responsive
-                    classes = tag.get("class", [])
-                    if isinstance(classes, str):
-                        classes = classes.split()
-                    if "cld-responsive" not in classes:
-                        classes.append("cld-responsive")
-                    tag["class"] = " ".join(classes)
-
-                    # Set data-src and src
-                    tag["data-src"] = map_cloudinary_url(
-                        src_val, cl_cloud, cl_map, effective_cl_trans
-                    )
-                    if use_blank_placeholder:
-                        tag["src"] = (
-                            "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
-                        )
-                    else:
-                        tag["src"] = map_cloudinary_url(
-                            src_val, cl_cloud, cl_map, effective_placeholder_trans
-                        )
-
-                    if effective_lazyload in ("true", "native", "observer"):
-                        tag["loading"] = "lazy"
-                    continue
-
-            # 2. For all tags (including img if not already processed above),
-            # process all attributes to map any matching URLs
-            for attr in list(tag.attrs.keys()):
-                if tag.name == "img" and attr in ("src", "data-src"):
-                    continue
-                val = tag[attr]
-                if isinstance(val, str):
-                    new_val = val
-                    for prefix, map_val in cl_map.items():
-                        if prefix in new_val:
-                            new_val = replace_urls_in_text(
-                                new_val,
-                                prefix,
-                                map_val,
-                                cl_cloud,
-                                effective_cl_trans,
-                                svg_trans=cl_trans_svg,
-                            )
-                    tag[attr] = new_val
-
-            # 3. If tag is a style tag, replace matches in its text content
-            if tag.name == "style" and tag.string:
-                new_css = tag.string
-                for prefix, map_val in cl_map.items():
-                    if prefix in new_css:
-                        new_css = replace_urls_in_text(
-                            new_css,
-                            prefix,
-                            map_val,
-                            cl_cloud,
-                            effective_cl_trans,
-                            svg_trans=cl_trans_svg,
-                        )
-                tag.string = new_css
-
-        # 4. Inject responsive script if enabled
-        if cl_responsive_enabled:
-            body = soup.find("body")
-            if not body:
-                body = soup
-
-            if methodology == "legacy":
-                core_js_url = cl_responsive.get(
-                    "cl_core_js", "https://unpkg.com/cloudinary-core@latest"
-                )
-                lib_script = soup.new_tag("script", src=core_js_url, type="text/javascript")
-                body.append(lib_script)
-
-                init_script = soup.new_tag("script", type="text/javascript")
-                init_script.string = (
-                    f"\nvar cl = cloudinary.Cloudinary.new({{cloud_name: '{cl_cloud}'}});\n"
-                    "cl.responsive();\n"
-                )
-                body.append(init_script)
-            else:
-                custom_js = cl_responsive.get("cl_custom_js")
-                if custom_js:
-                    if custom_js.strip().startswith("<script"):
-                        custom_soup = BeautifulSoup(custom_js, "html.parser")
-                        for sub_tag in custom_soup.contents:
-                            body.append(sub_tag)
-                    else:
-                        custom_script = soup.new_tag("script", type="text/javascript")
-                        custom_script.string = f"\n{custom_js}\n"
-                        body.append(custom_script)
-                else:
-                    # The load-in effect fades via ``filter`` (blur) ONLY and must not
-                    # touch ``opacity``: writing inline ``style.opacity`` overrides any
-                    # class/CSS-driven opacity animation on the image (e.g. scroll-driven
-                    # layer reveals that toggle ``opacity:0/1`` per step), forcing every
-                    # such image permanently visible. Blur alone gives the same fade-in.
-                    modern_script = soup.new_tag("script", type="text/javascript")
-                    if effective_lazyload == "observer":
-                        modern_script.string = (
-                            "\n(function() {\n"
-                            "  function initResponsive() {\n"
-                            "    const resizeObserver = new ResizeObserver(entries => {\n"
-                            "      for (let entry of entries) {\n"
-                            "        const img = entry.target;\n"
-                            "        const width = img.clientWidth || (img.parentElement ? img.parentElement.clientWidth : 0);\n"
-                            "        if (width > 0) {\n"
-                            "          const dpr = window.devicePixelRatio || 1;\n"
-                            "          const targetWidth = Math.ceil((width * dpr) / 100) * 100;\n"
-                            "          const dataSrc = img.getAttribute('data-src');\n"
-                            "          if (dataSrc) {\n"
-                            "            const newSrc = dataSrc.replace('w_auto', 'w_' + targetWidth);\n"
-                            "            if (img.getAttribute('src') !== newSrc) {\n"
-                            "              img.style.transition = 'filter 0.4s ease-in-out';\n"
-                            "              img.style.filter = 'blur(4px)';\n"
-                            "              const handleLoad = () => {\n"
-                            "                img.style.filter = 'none';\n"
-                            "                img.removeEventListener('load', handleLoad);\n"
-                            "              };\n"
-                            "              img.addEventListener('load', handleLoad);\n"
-                            "              img.setAttribute('src', newSrc);\n"
-                            "              if (img.complete) {\n"
-                            "                handleLoad();\n"
-                            "              }\n"
-                            "            }\n"
-                            "          }\n"
-                            "        }\n"
-                            "      }\n"
-                            "    });\n"
-                            "    const intersectionObserver = new IntersectionObserver((entries, observer) => {\n"
-                            "      for (let entry of entries) {\n"
-                            "        if (entry.isIntersecting) {\n"
-                            "          const img = entry.target;\n"
-                            "          observer.unobserve(img);\n"
-                            "          resizeObserver.observe(img);\n"
-                            "        }\n"
-                            "      }\n"
-                            "    }, { rootMargin: '50px' });\n"
-                            "    document.querySelectorAll('img.cld-responsive').forEach(img => {\n"
-                            "      intersectionObserver.observe(img);\n"
-                            "    });\n"
-                            "  }\n"
-                            "  if (document.readyState === 'loading') {\n"
-                            "    document.addEventListener('DOMContentLoaded', initResponsive);\n"
-                            "  } else {\n"
-                            "    initResponsive();\n"
-                            "  }\n"
-                            "})();\n"
-                        )
-                    else:
-                        modern_script.string = (
-                            "\n(function() {\n"
-                            "  function initResponsive() {\n"
-                            "    const observer = new ResizeObserver(entries => {\n"
-                            "      for (let entry of entries) {\n"
-                            "        const img = entry.target;\n"
-                            "        const width = img.clientWidth || (img.parentElement ? img.parentElement.clientWidth : 0);\n"
-                            "        if (width > 0) {\n"
-                            "          const dpr = window.devicePixelRatio || 1;\n"
-                            "          const targetWidth = Math.ceil((width * dpr) / 100) * 100;\n"
-                            "          const dataSrc = img.getAttribute('data-src');\n"
-                            "          if (dataSrc) {\n"
-                            "            const newSrc = dataSrc.replace('w_auto', 'w_' + targetWidth);\n"
-                            "            if (img.getAttribute('src') !== newSrc) {\n"
-                            "              img.style.transition = 'filter 0.4s ease-in-out';\n"
-                            "              img.style.filter = 'blur(4px)';\n"
-                            "              const handleLoad = () => {\n"
-                            "                img.style.filter = 'none';\n"
-                            "                img.removeEventListener('load', handleLoad);\n"
-                            "              };\n"
-                            "              img.addEventListener('load', handleLoad);\n"
-                            "              img.setAttribute('src', newSrc);\n"
-                            "              if (img.complete) {\n"
-                            "                handleLoad();\n"
-                            "              }\n"
-                            "            }\n"
-                            "          }\n"
-                            "        }\n"
-                            "      }\n"
-                            "    });\n"
-                            "    document.querySelectorAll('img.cld-responsive').forEach(img => {\n"
-                            "      observer.observe(img);\n"
-                            "    });\n"
-                            "  }\n"
-                            "  if (document.readyState === 'loading') {\n"
-                            "    document.addEventListener('DOMContentLoaded', initResponsive);\n"
-                            "  } else {\n"
-                            "    initResponsive();\n"
-                            "  }\n"
-                            "})();\n"
-                        )
-                    body.append(modern_script)
-
-        return str(soup)
-
     def pull_webflow(self, *, update_stubs: bool = False) -> list[Path]:
+        """Refresh the plugin's source cache without running a static build."""
+        return self._sync_url_stubs(refresh=True, update_stubs=update_stubs)
+
+    def _sync_url_stubs(self, *, refresh: bool, update_stubs: bool) -> list[Path]:
+        config_file = self.paths.src_docs / "mkdocs.yml"
+        site = MkDocsConfig(config_file_path=str(config_file))
+        with config_file.open("rb") as stream:
+            site.load_file(stream)
+        # A cache-only pull doesn't need the site's theme, hooks or other plugins installed.
+        entries = site["plugins"]
+        if isinstance(entries, dict):
+            entries = [{key: value} for key, value in entries.items()]
+        selected = [
+            entry
+            for entry in entries
+            if entry == "page-import" or isinstance(entry, dict) and "page-import" in entry
+        ]
+        plugin = Plugins().validate(selected).get("page-import")
+        if plugin is None:
+            return []
+        options = plugin.config
+        if refresh:
+            options.offline = False
+            options.refresh = True
+        cache_dir = (self.paths.src_docs / options.cache_dir).resolve()
+        docs = self.paths.src_docs / site.docs_dir
         written: list[Path] = []
-        user_agent = self.config.get("user_agent", "fontlab_www_toolkit")
-        for page in self.discover_webflow_pages():
-            html = self.process_page_html(fetch_text(page.import_url, user_agent=user_agent))
-            page.cache_path.parent.mkdir(parents=True, exist_ok=True)
-            page.cache_path.write_text(html, encoding="utf-8")
-            written.append(page.cache_path)
+        for path in sorted(docs.rglob("*.md")):
+            _, meta = get_data(path.read_text(encoding="utf-8-sig"))
+            try:
+                source = import_keys(meta)
+            except ValueError as exc:
+                raise ValueError(f"{path}: {exc}") from exc
+            if source is None or source[0] == "copy-file":
+                continue
+            url = source[1]
+            cached = cache_path(cache_dir, url)
+            if refresh:
+                fetch(url, self.paths.src_docs, options)
+                written.append(cached)
             if update_stubs:
-                self.update_stub(page)
-                written.append(page.markdown_path)
+                page = WebflowPage(path, url, cached)
+                if self.update_stub(page):
+                    written.append(path)
         return written
 
-    def update_stub(self, page: WebflowPage) -> None:
-        """Rewrite a stub: keep its original frontmatter, replace the body with
-        the Markdown extracted from the *cached* Webflow HTML via url22md.
-
-        The original Markdown body is discarded entirely; only the frontmatter
-        block is preserved verbatim.
-        """
-        original = page.markdown_path.read_text(encoding="utf-8")
-        frontmatter, _ = split_frontmatter(original)
+    def update_stub(self, page: WebflowPage) -> bool:
+        """Replace the stub body when cached source HTML yields changed Markdown."""
+        html = read_cached(page.cache_path.parent, page.import_url)
+        if html is None:
+            return False
+        original = page.markdown_path.read_bytes().decode("utf-8")
+        old_body, meta = get_data(original.removeprefix("\ufeff").replace("\r\n", "\n"))
+        if not import_keys(meta):
+            raise ValueError(f"{page.markdown_path}: missing import front matter")
+        # Slice the original lines so comments, quotes and CRLF survive exactly.
+        lines = original.splitlines(keepends=True)
+        header = "".join(lines[: len(lines) - len(old_body.splitlines())]).rstrip("\r\n")
         body = extract_markdown_via_url22md(
-            page.cache_path,
+            html,
             tool=self.config.get("url22md_tool", 1),
             bin_path=self.config.get("url22md_bin"),
             timeout=int(self.config.get("url22md_timeout", 60)),
         ).strip()
-        prefix = f"---\n{frontmatter}\n---\n\n" if frontmatter is not None else ""
-        page.markdown_path.write_text(f"{prefix}{body}\n", encoding="utf-8")
+        newline = "\r\n" if lines[0].endswith("\r\n") else "\n"
+        updated = header + newline * 2 + body.replace("\n", newline) + newline
+        if updated == original:
+            return False
+        page.markdown_path.write_bytes(updated.encode("utf-8"))
+        return True
 
     def convert_old_pages(self) -> list[Path]:
         mapping = self.load_old_pages()
@@ -586,20 +216,23 @@ class SiteBuilder:
         return written
 
     def build(self, *, pull_webflow: bool = True, update_stubs: bool = False) -> None:
-        if pull_webflow:
-            self.pull_webflow(update_stubs=update_stubs)
         self.paths.build_docs.mkdir(parents=True, exist_ok=True)
-        self.run_static_builder()
-        overlay_directory(self.paths.webflow_cache, self.paths.build_docs)
+        self.run_static_builder(offline=not pull_webflow)
+        if pull_webflow and update_stubs and self._sync_url_stubs(refresh=False, update_stubs=True):
+            # Re-index the rewritten Markdown using the HTML already fetched in the first pass.
+            self.run_static_builder(offline=True)
         overlay_directory(self.paths.static_docs, self.paths.build_docs)
         theme_publish_tree(self.paths.build_docs, self.config.get("theme_assets", []))
         publish_directory(self.paths.build_docs, self.paths.public)
 
-    def run_static_builder(self) -> None:
+    def run_static_builder(self, *, offline: bool = False) -> None:
         config_file = self.paths.src_docs / "mkdocs.yml"
         if not config_file.exists():
             raise FileNotFoundError(f"Missing site config: {config_file}")
 
+        env = {**os.environ, "PAGE_IMPORT_OFFLINE": "true" if offline else "false"}
+        if offline:
+            env["PAGE_IMPORT_ON_MISS"] = "keep"
         custom_cmd = self.config.get("mkdocs_command")
         if custom_cmd:
             if isinstance(custom_cmd, str):
@@ -607,7 +240,7 @@ class SiteBuilder:
                 cmd = shlex.split(cmd_str)
             else:
                 cmd = [str(arg).format(config_file=str(config_file)) for arg in custom_cmd]
-            run(cmd, self.paths.root)
+            run(cmd, self.paths.root, env=env)
         else:
             command = [
                 resolve_executable("properdocs"),
@@ -617,7 +250,7 @@ class SiteBuilder:
                 "--clean",
             ]
             try:
-                run(command, self.paths.root)
+                run(command, self.paths.root, env=env)
             except FileNotFoundError:
                 run(
                     [
@@ -630,6 +263,7 @@ class SiteBuilder:
                         "--clean",
                     ],
                     self.paths.root,
+                    env=env,
                 )
 
     def clean(self) -> None:
@@ -644,47 +278,14 @@ class SiteBuilder:
             shutil.rmtree(self.paths.build_docs)
 
 
-def parse_frontmatter(text: str) -> dict[str, str]:
-    if not text.startswith("---\n"):
-        return {}
-    end = text.find("\n---", 4)
-    if end == -1:
-        return {}
-    metadata: dict[str, str] = {}
-    for line in text[4:end].splitlines():
-        if not line.strip() or line.lstrip().startswith("#") or ":" not in line:
-            continue
-        key, value = line.split(":", 1)
-        metadata[key.strip()] = value.strip().strip("\"'")
-    return metadata
-
-
-def split_frontmatter(text: str) -> tuple[str | None, str]:
-    """Split Markdown into ``(frontmatter_inner, body)``.
-
-    ``frontmatter_inner`` is the raw text between the opening ``---`` and the
-    closing ``---`` (delimiters excluded), preserved verbatim so order,
-    comments, and quoting survive a round-trip. Returns ``(None, text)`` when no
-    frontmatter block is present.
-    """
-    if not text.startswith("---\n"):
-        return None, text
-    end = text.find("\n---", 4)
-    if end == -1:
-        return None, text
-    frontmatter = text[4:end]
-    body = text[end + 4 :].lstrip("\n")
-    return frontmatter, body
-
-
 def extract_markdown_via_url22md(
-    cache_path: Path,
+    html: str,
     *,
     tool: int | None = 1,
     bin_path: str | None = None,
     timeout: int = 60,
 ) -> str:
-    """Extract Markdown from a locally cached HTML file using ``url22md``.
+    """Extract Markdown from cached source HTML using ``url22md``.
 
     ``url22md`` only accepts HTTP(S) URLs, so the cached file's directory is
     served over a short-lived loopback HTTP server and the tool is pointed at
@@ -702,7 +303,7 @@ def extract_markdown_via_url22md(
         # Serve a noise-stripped copy so extractors don't capture inline JS/CSS
         # or hidden Webflow "Windflow" plugin metadata (which stores the
         # Tailwind config as visible div text) as page "prose".
-        cleaned = strip_extraction_noise(cache_path.read_text(encoding="utf-8"))
+        cleaned = strip_extraction_noise(html)
         served = tmp_dir / "page.html"
         served.write_text(cleaned, encoding="utf-8")
         out_dir = tmp_dir / "out"
@@ -721,7 +322,7 @@ def extract_markdown_via_url22md(
                 httpd.shutdown()
         produced = sorted(out_dir.glob("*.md"))
         if not produced:
-            raise RuntimeError(f"url22md produced no Markdown for {cache_path}")
+            raise RuntimeError("url22md produced no Markdown for the cached page")
         return produced[0].read_text(encoding="utf-8")
 
 
@@ -770,147 +371,6 @@ def parse_flat_yaml(text: str) -> dict[str, str]:
     return result
 
 
-def markdown_to_public_path(markdown_path: Path, markdown_root: Path) -> str:
-    relative = markdown_path.relative_to(markdown_root).with_suffix("")
-    if relative.name == "index":
-        parts = relative.parts[:-1]
-    else:
-        parts = relative.parts
-    return "/" + "/".join(parts) + "/"
-
-
-def fetch_text(url: str, user_agent: str = "fontlab_www_toolkit") -> str:
-    request = urllib.request.Request(url, headers={"User-Agent": user_agent})
-    with urllib.request.urlopen(request, timeout=30) as response:
-        charset = response.headers.get_content_charset() or "utf-8"
-        return response.read().decode(charset, errors="replace")
-
-
-# The "Made in Webflow" attribution badge Webflow injects into exported pages.
-# We are legally entitled to remove it on paid plans; do so in two ways so it is
-# gone both at processing time and as a defensive runtime fallback.
-WEBFLOW_BADGE_ANCHOR_RE = re.compile(
-    r"<a\b[^>]*\bclass=\"[^\"]*\bw-webflow-badge\b[^\"]*\"[^>]*>.*?</a>",
-    re.IGNORECASE | re.DOTALL,
-)
-WEBFLOW_BADGE_HIDE_CSS = "<style>.w-webflow-badge{display:none !important;}</style>"
-
-
-def strip_webflow_badge(html: str) -> str:
-    """Remove the ``a.w-webflow-badge`` element from the DOM (approach 2)."""
-    return WEBFLOW_BADGE_ANCHOR_RE.sub("", html)
-
-
-def inject_badge_hiding_css(html: str, hide_css: str = WEBFLOW_BADGE_HIDE_CSS) -> str:
-    """Add CSS that hides ``.w-webflow-badge`` (approach 1).
-
-    Injected once before ``</head>`` (or prepended when there is no head) so the
-    badge stays hidden even if a future export nests it somewhere we don't strip.
-    """
-    if hide_css in html:
-        return html
-    match = re.search(r"</head>", html, re.IGNORECASE)
-    if match:
-        return html[: match.start()] + hide_css + html[match.start() :]
-    return hide_css + html
-
-
-def clean_webflow_html(html: str) -> str:
-    """Apply both badge-removal approaches to a fetched Webflow page."""
-    return inject_badge_hiding_css(strip_webflow_badge(html))
-
-
-def is_image_or_allowed_media(url: str) -> bool:
-    # Strip query parameters and fragment identifier
-    path = url.split("?")[0].split("#")[0].lower()
-    allowed_extensions = {
-        # Images
-        ".png",
-        ".jpg",
-        ".jpeg",
-        ".webp",
-        ".svg",
-        ".gif",
-        ".avif",
-        ".ico",
-        ".heic",
-        ".heif",
-        ".tiff",
-        ".bmp",
-        # Videos
-        ".mp4",
-        ".webm",
-        ".ogv",
-        ".mov",
-        # Audio
-        ".mp3",
-        ".wav",
-        ".ogg",
-        ".aac",
-        ".flac",
-        ".m4a",
-    }
-    return any(path.endswith(ext) for ext in allowed_extensions)
-
-
-def is_svg_url(url: str) -> bool:
-    """True if ``url``'s path (ignoring query/fragment) ends in ``.svg``."""
-    path = url.split("?", 1)[0].split("#", 1)[0]
-    return path.lower().endswith(".svg")
-
-
-def map_cloudinary_url(
-    url: str,
-    cl_cloud: str,
-    cl_map: dict[str, str],
-    cl_trans: str,
-    svg_trans: str | None = None,
-) -> str:
-    for prefix, map_val in cl_map.items():
-        if url.startswith(prefix):
-            if not is_image_or_allowed_media(url):
-                return url
-            rest = url[len(prefix) :].lstrip("/")
-            trans = svg_trans if (svg_trans and is_svg_url(url)) else cl_trans
-            if trans and not trans.endswith("/"):
-                trans += "/"
-            return f"https://res.cloudinary.com/{cl_cloud}/image/upload/{trans}{map_val}/{rest}"
-    return url
-
-
-def replace_urls_in_text(
-    text: str,
-    prefix: str,
-    map_val: str,
-    cl_cloud: str,
-    cl_trans: str,
-    svg_trans: str | None = None,
-) -> str:
-    escaped_prefix = re.escape(prefix)
-    pattern = re.compile(escaped_prefix + r"[^\s\"'\)\>]*")
-
-    def replacer(match):
-        url = match.group(0)
-        # Check if the matched URL is nested inside a Cloudinary fetch URL
-        start = match.start()
-        before = text[max(0, start - 150) : start]
-        if "res.cloudinary.com" in before:
-            last_idx = before.rfind("res.cloudinary.com")
-            middle = before[last_idx:]
-            if not any(char in middle for char in (" ", '"', "'", ")", ">", "<", "\n", "\t")):
-                return url
-
-        if not is_image_or_allowed_media(url):
-            return url
-        rest = url[len(prefix) :].lstrip("/")
-        trans = svg_trans if (svg_trans and is_svg_url(url)) else cl_trans
-        if trans and not trans.endswith("/"):
-            trans += "/"
-        return f"https://res.cloudinary.com/{cl_cloud}/image/upload/{trans}{map_val}/{rest}"
-
-    return pattern.sub(replacer, text)
-
-
 def convert_old_html(source: Path, title: str) -> str:
     html = source.read_text(encoding="utf-8", errors="replace")
     body = extract_old_page_content(
@@ -945,95 +405,6 @@ def extract_old_page_content(html: str) -> str:
 def extract_first_tag(html: str, tag: str) -> str:
     match = re.search(rf"<{tag}\b[^>]*>(.*?)</{tag}>", html, re.IGNORECASE | re.DOTALL)
     return match.group(1) if match else ""
-
-
-def split_google_fonts_links(html: str) -> str:
-    """Split a multi-family Google Fonts ``<link>`` into one link per family.
-
-    Webflow emits a single ``fonts.googleapis.com/css2?family=A&family=B&…``
-    link. If a downstream step truncates the served URL at the first ``&`` (as
-    seen on the deployed site, where only the first family survives), every other
-    family silently falls back to a system serif. Emitting a separate
-    ``?family=X&display=swap`` link per family removes the long ``&family=``
-    chain; even if ``&display=swap`` is later dropped, ``?family=X`` still loads.
-
-    No-op when there are no multi-family Google Fonts links.
-    """
-    if "fonts.googleapis.com/css2" not in html:
-        return html
-    soup = BeautifulSoup(html, "html.parser")
-    # Collect targets in a first pass *before* mutating, because ``decompose``
-    # nulls a tag's ``.attrs`` (bs4 >=4.13) — and decomposing one link can clear
-    # the ``.attrs`` of a sibling link still held in the live ResultSet, so
-    # reading ``link["href"]`` mid-loop would raise once two links are split.
-    targets = []
-    for link in soup.find_all("link", href=True):
-        href = link.get("href")
-        if not href or "fonts.googleapis.com/css2" not in href or "family=" not in href:
-            continue
-        base, _, query = href.partition("?")
-        params = query.split("&")
-        families = [p for p in params if p.startswith("family=")]
-        if len(families) < 2:
-            continue
-        extras = [p for p in params if p and not p.startswith("family=")]
-        suffix = ("&" + "&".join(extras)) if extras else ""
-        targets.append((link, base, families, suffix))
-    for link, base, families, suffix in targets:
-        for family in families:
-            new = soup.new_tag("link", rel="stylesheet", href=f"{base}?{family}{suffix}")
-            link.insert_before(new)
-        link.decompose()
-    return str(soup) if targets else html
-
-
-# Script ``type`` values Cloudflare Rocket Loader rewrites to defer/reorder
-# execution (an empty string == no ``type`` attribute, i.e. a classic script).
-# Data scripts (application/json, ld+json, import maps, …) are ignored by Rocket
-# Loader, so they are intentionally absent here and left untouched.
-ROCKET_LOADER_SCRIPT_TYPES: frozenset[str] = frozenset(
-    {
-        "",
-        "text/javascript",
-        "application/javascript",
-        "text/ecmascript",
-        "application/ecmascript",
-        "module",
-    }
-)
-
-
-def exempt_scripts_from_rocket_loader(html: str) -> str:
-    """Add ``data-cfasync="false"`` to every executable ``<script>`` tag.
-
-    Cloudflare Rocket Loader (a zone-level optimisation enabled on the deployed
-    host) rewrites each executable script's ``type`` to a private token so it
-    can defer and reorder execution. It cannot run ES modules and changes the
-    order of classic scripts, which breaks scroll-driven interactions and module
-    web components on the live site — while the staging webflow.io host, with no
-    Cloudflare in front, runs the identical HTML correctly. The documented
-    opt-out is ``data-cfasync="false"``: Rocket Loader leaves such scripts alone
-    and the browser executes them natively, in document order (the staging
-    behaviour).
-
-    Only scripts Rocket Loader would otherwise mangle are touched — inline or
-    external JavaScript and ``type="module"``. Data blocks (JSON, LD+JSON,
-    import maps, …) are left unchanged. Idempotent: a script that already
-    carries ``data-cfasync`` is skipped. Returns the input string unchanged when
-    nothing needs adding, avoiding a needless re-serialisation.
-    """
-    if "<script" not in html:
-        return html
-    soup = BeautifulSoup(html, "html.parser")
-    changed = False
-    for tag in soup.find_all("script"):
-        if tag.has_attr("data-cfasync"):
-            continue
-        if (tag.get("type") or "").strip().lower() not in ROCKET_LOADER_SCRIPT_TYPES:
-            continue
-        tag["data-cfasync"] = "false"
-        changed = True
-    return str(soup) if changed else html
 
 
 def strip_extraction_noise(html: str) -> str:

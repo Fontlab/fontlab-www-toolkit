@@ -1,8 +1,8 @@
 # Webflow stub frontmatter
 
 A **Webflow stub** is any Markdown file in `src_docs/md/` that carries a
-`webflow-import-url:` key in its YAML frontmatter.  The toolkit uses it to know
-which URL to fetch and cache, and which `build_docs/` path to overlay.
+`webflow-import-url:` key in its YAML frontmatter.  The page-import plugin fetches this URL and renders the imported HTML at the
+Markdown page’s output path.
 
 ## Required frontmatter
 
@@ -15,12 +15,12 @@ webflow-import-url: https://your-project.webflow.io/page-slug
 
 | Key | Required | Description |
 |---|---|---|
-| `title` | Yes | Page title used by ProperDocs |
+| `title` | No | Page title used by ProperDocs |
 | `webflow-import-url` | Yes | Canonical Webflow preview URL to fetch and cache |
 
 The stub body (everything after the closing `---`) is a placeholder.  It is
-used by ProperDocs during Layer 1 (static build) but is replaced by the cached
-Webflow HTML during Layer 2.
+indexed by search during the static build. Visitors see imported HTML when
+available, or the rendered stub on an offline cache miss.
 
 ## Optional stub body
 
@@ -30,19 +30,16 @@ title: Vexy Lines
 webflow-import-url: https://vexy-art.webflow.io/lines
 ---
 
-<!-- This body is overwritten by the Webflow cache at build time. -->
 # Vexy Lines
 
 Product page placeholder.
 ```
 
-## Frontmatter key customisation
+## Other import keys
 
-The default key `webflow-import-url` can be overridden in the JSON config:
-
-```json
-{ "frontmatter_key": "wf-url" }
-```
+Use `import-url` for general HTML or `copy-file` for a local export. Each stub
+accepts one import key. Migrate custom `frontmatter_key` values to these fixed
+keys and remove the setting from the toolkit JSON file.
 
 ## Stub body refresh (`--update_stubs`)
 
@@ -66,14 +63,6 @@ an external runtime dependency, not a packaged dependency of this library.
 
 ## URL → cache path mapping
 
-The stub's `webflow-import-url` value determines where the cached HTML is
-stored:
-
-| Markdown path | Public path | Cache path |
-|---|---|---|
-| `src_docs/md/font-editor/fontlab.md` | `/font-editor/fontlab/` | `wf_cache/font-editor/fontlab/index.html` |
-| `src_docs/md/index.md` | `/` | `wf_cache/index.html` |
-| `src_docs/md/lines/index.md` | `/lines/` | `wf_cache/lines/index.html` |
-
-The public path is derived from the Markdown path (not from the Webflow URL),
-so moving a stub file changes its published URL.
+The Markdown path determines the public path. The exact source URL determines
+the SHA-256 cache filename. Moving a stub preserves its cached source when
+the URL stays the same. See [cache layout](wf-cache.md).

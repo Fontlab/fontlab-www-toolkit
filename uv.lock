@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -200,11 +200,13 @@ wheels = [
 name = "fontlab-www-toolkit"
 source = { editable = "." }
 dependencies = [
+    { name = "beautifulsoup4" },
     { name = "fire" },
     { name = "markdownify" },
     { name = "mkdocs" },
     { name = "mkdocs-materialx" },
     { name = "properdocs" },
+    { name = "vexy-mkdocs-page-import" },
 ]
 
 [package.dev-dependencies]
@@ -216,11 +218,13 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "beautifulsoup4" },
     { name = "fire", specifier = ">=0.7.0" },
     { name = "markdownify", specifier = ">=1.2.2" },
     { name = "mkdocs", specifier = ">=1.6.1" },
     { name = "mkdocs-materialx", specifier = ">=10.1.4" },
     { name = "properdocs", specifier = ">=1.6.7" },
+    { name = "vexy-mkdocs-page-import", editable = "/Users/adam/Developer/vcs3/github.vexyart/vexy-mkdocs-page-import" },
 ]
 
 [package.metadata.requires-dev]
@@ -831,6 +835,26 @@ sdist = { url = "https://files.pythonhosted.org/packages/53/0c/06f8b233b8fd13b9e
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7f/3e/5db95bcf282c52709639744ca2a8b149baccf648e39c8cc87553df9eae0c/urllib3-2.7.0-py3-none-any.whl", hash = "sha256:9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897", size = 131087, upload-time = "2026-05-07T16:13:17.151Z" },
 ]
+
+[[package]]
+name = "vexy-mkdocs-page-import"
+source = { editable = "/Users/adam/Developer/vcs3/github.vexyart/vexy-mkdocs-page-import" }
+dependencies = [
+    { name = "beautifulsoup4" },
+    { name = "mkdocs" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "beautifulsoup4", specifier = ">=4.13" },
+    { name = "markdownify", marker = "extra == 'dev'", specifier = ">=1.2.2" },
+    { name = "mkdocs", specifier = ">=1.6" },
+    { name = "mypy", marker = "extra == 'dev'" },
+    { name = "pytest", marker = "extra == 'dev'" },
+    { name = "pytest-cov", marker = "extra == 'dev'" },
+    { name = "ruff", marker = "extra == 'dev'" },
+]
+provides-extras = ["dev"]
 
 [[package]]
 name = "watchdog"

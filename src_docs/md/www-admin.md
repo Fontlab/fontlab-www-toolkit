@@ -75,33 +75,14 @@ schema.
   the responsibility of the PHP layer.
 - `uv run` is called with the site repo as the working directory; there is no
   privilege escalation.
-- The `wf_cache/` directory is writable by the web server user only when
-  `pull-webflow` is called; build-only runs do not write to disk (aside from
-  `build_docs/` and `public/`).
+- Online builds and `pull-webflow` need write access to the URL cache.
+  Routine `--skip_webflow` builds can use a read-only cache.
 
 ## Per-site config file
 
-Each consumer site can have a `fontlab-www-toolkit.json` in its root:
-
-```json
-{
-  "frontmatter_key": "webflow-import-url",
-  "split_google_fonts": true,
-  "rocket_loader_optout": true,
-  "cloudinary": {
-    "cl_cloud": "fontlab",
-    "cl_map": {
-      "https://cdn.prod.website-files.com/SITE_ID": "wf"
-    },
-    "cl_trans": "c_limit,w_auto/f_auto,q_auto,dpr_auto/",
-    "cl_responsive": {
-      "methodology": "modern",
-      "lazyload": "observer",
-      "placeholder": "blur"
-    }
-  }
-}
-```
+Each consumer site can keep toolkit settings such as `theme_assets` in
+`fontlab-www-toolkit.json` at its root. Configure imports and
+`webflow.cloudinary` under `page-import` in `src_docs/mkdocs.yml`.
 
 Pass a non-default path with `--config`:
 
