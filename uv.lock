@@ -398,7 +398,7 @@ requires-dist = [
     { name = "mkdocs", specifier = ">=1.6.1" },
     { name = "mkdocs-materialx", specifier = ">=10.1.4" },
     { name = "properdocs", specifier = ">=1.6.7" },
-    { name = "vexy-mkdocs-page-import", editable = "/Users/adam/Developer/vcs3/github.vexyart/vexy-mkdocs-page-import" },
+    { name = "vexy-mkdocs-page-import", specifier = ">=0.1.0,<0.2" },
 ]
 
 [package.metadata.requires-dev]
@@ -1376,27 +1376,18 @@ wheels = [
 
 [[package]]
 name = "vexy-mkdocs-page-import"
-source = { editable = "/Users/adam/Developer/vcs3/github.vexyart/vexy-mkdocs-page-import" }
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
     { name = "beautifulsoup4" },
     { name = "mkdocs" },
     { name = "yarl" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiohttp", specifier = ">=3.12" },
-    { name = "beautifulsoup4", specifier = ">=4.13" },
-    { name = "mkdocs", specifier = ">=1.6" },
-    { name = "mypy", marker = "extra == 'dev'" },
-    { name = "properdocs", marker = "extra == 'dev'", specifier = "==1.6.7" },
-    { name = "pytest", marker = "extra == 'dev'" },
-    { name = "pytest-cov", marker = "extra == 'dev'" },
-    { name = "ruff", marker = "extra == 'dev'" },
-    { name = "yarl", specifier = ">=1.17" },
+sdist = { url = "https://files.pythonhosted.org/packages/b3/76/0c30d5a60cb30fad976b6466dafcb04103fc41ffbeddb5c49a9cd532c7a1/vexy_mkdocs_page_import-0.1.0.tar.gz", hash = "sha256:a0fcb7deef37052707fdc38fea6d9d9926b324040521c3b85b30d40a91c9652e", size = 38858, upload-time = "2026-11-23T21:16:44.415Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3f/21/b10f62f9b0ef36b6ff19753fbaf00041443e108d92d2cc0d86db19449da7/vexy_mkdocs_page_import-0.1.0-py3-none-any.whl", hash = "sha256:db2060ed7802e033bbccc7ecb6ea781542b457f525b8547bb98246969630523d", size = 24624, upload-time = "2026-11-23T21:16:43.352Z" },
 ]
-provides-extras = ["dev"]
 
 [[package]]
 name = "watchdog"

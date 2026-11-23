@@ -45,9 +45,6 @@ fontlab-www-toolkit = "fontlab_www_toolkit.__main__:main"
 # Backwards-compatible alias used by per-site build wrappers.
 fontlab-build       = "fontlab_www_toolkit.__main__:main"
 
-[tool.uv.sources]
-vexy-mkdocs-page-import = { path = "/Users/adam/Developer/vcs3/github.vexyart/vexy-mkdocs-page-import", editable = true }
-
 [build-system]
 requires = ["hatch-vcs>=0.4.0", "hatchling>=1.27.0"]
 build-backend = "hatchling.build"
@@ -73,10 +70,6 @@ include = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fontlab_www_toolkit"]
-
-[tool.hatch.metadata]
-# remove after vexy-mkdocs-page-import is on PyPI
-allow-direct-references = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

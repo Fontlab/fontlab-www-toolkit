@@ -2,7 +2,7 @@
 
 All notable changes to `fontlab-www-toolkit` are documented here.
 
-## Unreleased
+## v1.0.16 — 2026-11-23
 
 - `--update_stubs` now extracts with url22md engine 2 (strict trafilatura) by
   default. The old default, engine 1, fell back to Playwright and launched headless
