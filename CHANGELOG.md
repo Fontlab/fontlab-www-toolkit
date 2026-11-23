@@ -4,6 +4,9 @@ All notable changes to `fontlab-www-toolkit` are documented here.
 
 ## Unreleased
 
+- `--update_stubs` now extracts with url22md engine 2 (strict trafilatura) by
+  default. The old default, engine 1, fell back to Playwright and launched headless
+  Chromium, which crashed on macOS, then reached cloud extractors.
 - ProperDocs now imports pages during rendering with `vexy-mkdocs-page-import`.
   The toolkit overlays static files, then injects theme assets before publishing.
 - `build --skip_webflow` sets `PAGE_IMPORT_OFFLINE=true` and

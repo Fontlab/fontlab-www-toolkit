@@ -152,7 +152,7 @@ Set these options in `fontlab-www-toolkit.json` at the site root or pass
 | `mkdocs_command` | Custom build command (string or list). Use `{config_file}` for the site configuration path. |
 | `old_pages_config` | Legacy HTML conversion mapping. Defaults to `src_docs/old-pages.yml`. |
 | `url22md_bin` | Extraction executable. Defaults to `url22md` on `PATH`. |
-| `url22md_tool` | Extraction engine. Defaults to `1` for local extraction. A value of `null` allows the tool's full fallback chain, including cloud tools. |
+| `url22md_tool` | Extraction engine. Defaults to `2` (strict trafilatura): local, with no fallback. Engines `1` and `3` fall back to Playwright (headless Chromium) and then to cloud tools. A value of `null` allows the tool's full fallback chain, including cloud tools. |
 | `url22md_timeout` | Extraction timeout in seconds. Defaults to `60`. |
 
 Sites on the fly-january theme use these assets for imported pages:

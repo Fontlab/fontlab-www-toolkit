@@ -180,6 +180,13 @@ def test_update_stub_keeps_frontmatter_and_replaces_body(
     )
 
 
+def test_url22md_default_tool_when_unset_then_strict_local_engine() -> None:
+    from fontlab_www_toolkit.builder import URL22MD_LOCAL_TOOL
+
+    # Engines 2 and 4 are the only url22md engines with no browser or cloud fallback.
+    assert URL22MD_LOCAL_TOOL in {2, 4}, "default url22md engine must not fall back to Playwright"
+
+
 @pytest.mark.skipif(shutil.which("url22md") is None, reason="url22md not installed")
 def test_extract_markdown_via_url22md_when_real_binary_then_returns_markdown(
     tmp_path: Path,
@@ -192,8 +199,8 @@ def test_extract_markdown_via_url22md_when_real_binary_then_returns_markdown(
         "</article></body></html>",
         encoding="utf-8",
     )
-    # The readability engine runs locally and has no browser or cloud fallback.
-    markdown = extract_markdown_via_url22md(cache.read_text(), tool=6, timeout=30)
+    # Engine 4 is strict readability: local, with no browser or cloud fallback.
+    markdown = extract_markdown_via_url22md(cache.read_text(), tool=4, timeout=30)
     assert "Hello" in markdown
 
 

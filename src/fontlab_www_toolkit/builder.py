@@ -180,7 +180,7 @@ class SiteBuilder:
         header = "".join(lines[: len(lines) - len(old_body.splitlines())]).rstrip("\r\n")
         body = extract_markdown_via_url22md(
             html,
-            tool=self.config.get("url22md_tool", 1),
+            tool=self.config.get("url22md_tool", URL22MD_LOCAL_TOOL),
             bin_path=self.config.get("url22md_bin"),
             timeout=int(self.config.get("url22md_timeout", 60)),
         ).strip()
@@ -300,10 +300,15 @@ def _page_import_entries(config_file: Path) -> tuple[Path, list]:
     return docs, selected
 
 
+# url22md engine 2 is strict trafilatura: local, with no fallback. Engines 1 and 3
+# fall back to 5 (Playwright, which launches headless Chromium) and then to cloud tools.
+URL22MD_LOCAL_TOOL = 2
+
+
 def extract_markdown_via_url22md(
     html: str,
     *,
-    tool: int | None = 1,
+    tool: int | None = URL22MD_LOCAL_TOOL,
     bin_path: str | None = None,
     timeout: int = 60,
 ) -> str:
@@ -311,9 +316,10 @@ def extract_markdown_via_url22md(
 
     ``url22md`` only accepts HTTP(S) URLs, so the cached file's directory is
     served over a short-lived loopback HTTP server and the tool is pointed at
-    it. ``tool`` forces a specific extraction engine (default ``1`` =
-    trafilatura) to keep extraction offline and deterministic; pass ``None`` to
-    let url22md run its full fallback chain (which may reach cloud tools).
+    it. ``tool`` forces a specific extraction engine. The default,
+    ``URL22MD_LOCAL_TOOL``, keeps extraction local and deterministic. Pass
+    ``None`` to let url22md run its full fallback chain, which launches headless
+    Chromium and may reach cloud tools.
     """
     binary = bin_path or shutil.which("url22md")
     if not binary:
