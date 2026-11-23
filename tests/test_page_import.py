@@ -13,7 +13,7 @@ from threading import Thread
 import pytest
 from vexy_mkdocs_page_import import cache_path, read_cached
 
-from fontlab_www_toolkit.builder import BuildPaths, SiteBuilder
+from fontlab_www_toolkit.builder import BuildPaths, SiteBuilder, _page_import_entries
 
 HTML = "<html><head></head><body>Source from origin</body></html>"
 ASSETS = ["https://example.org/fly.css", "https://example.org/fly.js"]
@@ -71,9 +71,10 @@ def test_build_imports_then_overlays_and_themes(site, monkeypatch):
     assert (paths.public / "asset.txt").read_text() == "Static override"
 
 
-def test_skip_webflow_keeps_stub_on_empty_cache_without_network(site, monkeypatch):
+@pytest.mark.parametrize("on_miss", ["keep", "error"])
+def test_skip_webflow_keeps_stub_on_empty_cache_without_network(site, monkeypatch, on_miss):
     paths, _, requests = site
-    monkeypatch.setenv("PAGE_IMPORT_ON_MISS", "error")
+    monkeypatch.setenv("PAGE_IMPORT_ON_MISS", on_miss)
     subprocess.run(
         [sys.executable, "-m", "fontlab_www_toolkit", "build", "--skip_webflow"],
         cwd=paths.root,
@@ -81,6 +82,7 @@ def test_skip_webflow_keeps_stub_on_empty_cache_without_network(site, monkeypatc
     )
     assert requests == []
     assert "Stub body" in (paths.public / "imported/index.html").read_text()
+    assert "Normal page" in (paths.public / "index.html").read_text()
     assert not (paths.root / "wf_cache").exists()
 
 
@@ -116,6 +118,69 @@ def test_pull_refreshes_custom_cache_for_both_url_keys_without_building(site):
     assert read_cached(cache, url + "/wf") == HTML
     assert not paths.build_docs.exists()
     assert not paths.public.exists()
+
+
+def test_pull_webflow_update_stubs_writes_cache_and_rewrites_markdown(site):
+    paths, url, requests = site
+    extractor = paths.root / "url22md"
+    extractor.write_text(
+        f"#!{sys.executable}\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        "from urllib.request import urlopen\n"
+        "from markdownify import markdownify\n"
+        "with urlopen(sys.argv[sys.argv.index('--url') + 1]) as response:\n"
+        "    body = markdownify(response.read().decode())\n"
+        "out = Path(sys.argv[sys.argv.index('--output_dir') + 1])\n"
+        "(out / 'page.md').write_text(body)\n"
+    )
+    extractor.chmod(0o755)
+    (paths.root / "fontlab-www-toolkit.json").write_text(
+        json.dumps({"url22md_bin": str(extractor)})
+    )
+    subprocess.run(
+        [sys.executable, "-m", "fontlab_www_toolkit", "pull-webflow", "--update_stubs"],
+        cwd=paths.root,
+        check=True,
+    )
+    assert requests == ["/source"]
+    assert cache_path(paths.root / "wf_cache", url).read_text() == HTML
+    assert (paths.markdown / "imported.md").read_text() == (
+        f"---\nimport-url: {url}\n---\n\nSource from origin\n"
+    )
+
+
+def test_pull_failure_names_stub_and_preserves_previous_cache_and_body(site, monkeypatch):
+    paths, url, requests = site
+    config = paths.src_docs / "mkdocs.yml"
+    config.write_text(
+        config.read_text().replace("      webflow:", "      max_bytes: 8\n      webflow:")
+    )
+    cache = cache_path(paths.root / "wf_cache", url)
+    cache.parent.mkdir()
+    cache.write_text("stale HTML")
+    stub = paths.markdown / "imported.md"
+    original = stub.read_bytes()
+    monkeypatch.setattr(SiteBuilder, "update_stub", lambda *_: pytest.fail("rewrote stale stub"))
+    with pytest.raises(RuntimeError, match=r"imported\.md.*max_bytes"):
+        SiteBuilder(paths).pull_webflow(update_stubs=True)
+    assert requests == ["/source"]
+    assert cache.read_text() == "stale HTML"
+    assert stub.read_bytes() == original
+
+
+def test_page_import_entries_loads_inherited_plugins(tmp_path):
+    (tmp_path / "base.yml").write_text("docs_dir: pages\nplugins:\n  - search\n  - page-import\n")
+    config = tmp_path / "mkdocs.yml"
+    config.write_text("INHERIT: base.yml\nsite_name: Child\n")
+    assert _page_import_entries(config) == (tmp_path / "pages", ["page-import"])
+
+
+def test_page_import_entries_resolves_env_plugin(tmp_path, monkeypatch):
+    monkeypatch.setenv("TEST_SITE_PLUGIN", "page-import")
+    config = tmp_path / "mkdocs.yml"
+    config.write_text("docs_dir: pages\nplugins:\n  - !ENV [TEST_SITE_PLUGIN, search]\n")
+    assert _page_import_entries(config) == (tmp_path / "pages", ["page-import"])
 
 
 def test_build_update_stubs_indexes_cached_text_and_fetches_only_once(site, monkeypatch):

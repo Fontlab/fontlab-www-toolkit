@@ -39,8 +39,7 @@ from mkdocs.config.config_options import Plugins
 from mkdocs.config.defaults import MkDocsConfig
 from mkdocs.utils import is_markdown_file
 from mkdocs.utils.meta import get_data
-from vexy_mkdocs_page_import import cache_path, import_keys, read_cached
-from vexy_mkdocs_page_import.fetch import fetch
+from vexy_mkdocs_page_import import cache_path, import_keys, read_cached, refresh_cache
 
 from .theme import theme_publish_tree
 
@@ -136,12 +135,11 @@ class SiteBuilder:
         plugin = Plugins().validate(selected).get("page-import")
         if plugin is None:
             if selected and refresh:
-                logging.getLogger(__name__).warning("page-import is disabled. Skipping pull-webflow.")
+                logging.getLogger(__name__).warning(
+                    "page-import is disabled. Skipping pull-webflow."
+                )
             return []
         options = plugin.config
-        if refresh:
-            options.offline = False
-            options.refresh = True
         cache_dir = (self.paths.src_docs / options.cache_dir).resolve()
         written: list[Path] = []
         for path in sorted(docs.rglob("*.md")):
@@ -155,7 +153,12 @@ class SiteBuilder:
             url = source[1]
             cached = cache_path(cache_dir, url)
             if refresh:
-                fetch(url, self.paths.src_docs, options)
+                try:
+                    refresh_cache(
+                        url, cache_dir, timeout=options.timeout, max_bytes=options.max_bytes
+                    )
+                except (OSError, ValueError) as exc:
+                    raise RuntimeError(f"Failed to refresh {path}: {exc}") from exc
                 written.append(cached)
             if update_stubs:
                 page = WebflowPage(path, url, cached)
@@ -281,7 +284,8 @@ def _page_import_entries(config_file: Path) -> tuple[Path, list]:
         entry
         for entry in entries
         if entry in ("page-import", "/page-import")
-        or isinstance(entry, dict) and ("page-import" in entry or "/page-import" in entry)
+        or isinstance(entry, dict)
+        and ("page-import" in entry or "/page-import" in entry)
     ]
     docs = config_file.parent / site.docs_dir
     if not selected:

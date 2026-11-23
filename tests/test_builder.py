@@ -155,7 +155,9 @@ def test_update_stub_keeps_frontmatter_and_replaces_body(
     stub = tmp_path / "src_docs/md/lines/index.md"
     stub.parent.mkdir(parents=True)
     url = "https://x.test/lines"
-    frontmatter = f'\ufeff---\r\n# preserve me\r\ntitle: "Vexy Lines"\r\nimport-url: {url}\r\n---  \r\n'
+    frontmatter = (
+        f'\ufeff---\r\n# preserve me\r\ntitle: "Vexy Lines"\r\nimport-url: {url}\r\n---  \r\n'
+    )
     stub.write_bytes((frontmatter + "\r\nPlaceholder body.\r\n").encode())
     cache = cache_path(tmp_path / "wf_cache", url)
     cache.parent.mkdir()
@@ -190,7 +192,8 @@ def test_extract_markdown_via_url22md_when_real_binary_then_returns_markdown(
         "</article></body></html>",
         encoding="utf-8",
     )
-    markdown = extract_markdown_via_url22md(cache.read_text(), tool=3, timeout=30)
+    # The readability engine runs locally and has no browser or cloud fallback.
+    markdown = extract_markdown_via_url22md(cache.read_text(), tool=6, timeout=30)
     assert "Hello" in markdown
 
 
