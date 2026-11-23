@@ -37,6 +37,7 @@ from bs4 import BeautifulSoup
 from markdownify import ATX, markdownify
 from mkdocs.config.config_options import Plugins
 from mkdocs.config.defaults import MkDocsConfig
+from mkdocs.utils import is_markdown_file
 from mkdocs.utils.meta import get_data
 from vexy_mkdocs_page_import import cache_path, import_keys, read_cached
 from vexy_mkdocs_page_import.fetch import fetch
@@ -131,28 +132,17 @@ class SiteBuilder:
         return self._sync_url_stubs(refresh=True, update_stubs=update_stubs)
 
     def _sync_url_stubs(self, *, refresh: bool, update_stubs: bool) -> list[Path]:
-        config_file = self.paths.src_docs / "mkdocs.yml"
-        site = MkDocsConfig(config_file_path=str(config_file))
-        with config_file.open("rb") as stream:
-            site.load_file(stream)
-        # A cache-only pull doesn't need the site's theme, hooks or other plugins installed.
-        entries = site["plugins"]
-        if isinstance(entries, dict):
-            entries = [{key: value} for key, value in entries.items()]
-        selected = [
-            entry
-            for entry in entries
-            if entry == "page-import" or isinstance(entry, dict) and "page-import" in entry
-        ]
+        docs, selected = _page_import_entries(self.paths.src_docs / "mkdocs.yml")
         plugin = Plugins().validate(selected).get("page-import")
         if plugin is None:
+            if selected and refresh:
+                logging.getLogger(__name__).warning("page-import is disabled. Skipping pull-webflow.")
             return []
         options = plugin.config
         if refresh:
             options.offline = False
             options.refresh = True
         cache_dir = (self.paths.src_docs / options.cache_dir).resolve()
-        docs = self.paths.src_docs / site.docs_dir
         written: list[Path] = []
         for path in sorted(docs.rglob("*.md")):
             _, meta = get_data(path.read_text(encoding="utf-8-sig"))
@@ -230,6 +220,7 @@ class SiteBuilder:
         if not config_file.exists():
             raise FileNotFoundError(f"Missing site config: {config_file}")
 
+        _page_import_entries(config_file)
         env = {**os.environ, "PAGE_IMPORT_OFFLINE": "true" if offline else "false"}
         if offline:
             env["PAGE_IMPORT_ON_MISS"] = "keep"
@@ -276,6 +267,33 @@ class SiteBuilder:
                     elif target.exists():
                         target.unlink()
             shutil.rmtree(self.paths.build_docs)
+
+
+def _page_import_entries(config_file: Path) -> tuple[Path, list]:
+    """Read the import configuration and flag stubs that would silently render as Markdown."""
+    site = MkDocsConfig(config_file_path=str(config_file))
+    with config_file.open("rb") as stream:
+        site.load_file(stream)
+    entries = site["plugins"]
+    if isinstance(entries, dict):
+        entries = [{key: value} for key, value in entries.items()]
+    selected = [
+        entry
+        for entry in entries
+        if entry in ("page-import", "/page-import")
+        or isinstance(entry, dict) and ("page-import" in entry or "/page-import" in entry)
+    ]
+    docs = config_file.parent / site.docs_dir
+    if not selected:
+        markdown = (p for p in docs.rglob("*") if is_markdown_file(p.name) and p.is_file())
+        for path in sorted(markdown):
+            _, meta = get_data(path.read_text(encoding="utf-8-sig"))
+            if meta.keys() & {"import-url", "webflow-import-url", "copy-file"}:
+                raise ValueError(
+                    f"{path} declares an import, but {config_file} has no page-import entry. "
+                    "See README.md#migrate-a-site-to-page-import."
+                )
+    return docs, selected
 
 
 def extract_markdown_via_url22md(

@@ -130,6 +130,8 @@ The toolkit then copies `static_docs/` over the result, injects configured
 `PAGE_IMPORT_ON_MISS=keep` for the static build. The plugin uses cached URL
 imports and keeps rendered Markdown on a miss. An ordinary build sets
 `PAGE_IMPORT_OFFLINE=false` and respects the plugin’s `refresh` setting.
+Online builds leave `PAGE_IMPORT_ON_MISS` as supplied by the caller. If it
+is unset, the `mkdocs.yml` default applies.
 `pull-webflow` explicitly refreshes both URL import types.
 
 Pass `--update_stubs` to `pull-webflow` or `build` to rewrite URL stub bodies

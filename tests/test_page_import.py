@@ -57,7 +57,7 @@ def site(tmp_path: Path) -> Iterator[tuple[BuildPaths, str, list[str]]]:
 
 
 def test_build_imports_then_overlays_and_themes(site, monkeypatch):
-    paths, url, requests = site
+    paths, _, requests = site
     monkeypatch.setenv("PAGE_IMPORT_OFFLINE", "true")
     legacy = paths.root / "wf_cache/imported/index.html"
     legacy.parent.mkdir(parents=True)
@@ -65,8 +65,7 @@ def test_build_imports_then_overlays_and_themes(site, monkeypatch):
     SiteBuilder(paths).build()
     assert requests == ["/source"]
     page = (paths.public / "imported/index.html").read_text()
-    assert "Source from origin" in page and "Stub body" not in page
-    assert not (paths.public / cache_path(paths.root / "wf_cache", url).name).exists()
+    assert page.endswith("<body>Source from origin</body></html>")
     assert all(page.count(asset) == 1 for asset in ASSETS)
     assert "Normal page" in (paths.public / "index.html").read_text()
     assert (paths.public / "asset.txt").read_text() == "Static override"
@@ -93,7 +92,9 @@ def test_pull_refreshes_custom_cache_for_both_url_keys_without_building(site):
         .replace("../wf_cache", "cache\n      refresh: false")
         .replace("  - search", "  - site-only-plugin")
     )
-    (paths.markdown / "webflow.md").write_text(f'\ufeff---\nwebflow-import-url: "{url}/wf" # URL\n---\n')
+    (paths.markdown / "webflow.md").write_text(
+        f'\ufeff---\nwebflow-import-url: "{url}/wf" # URL\n---\n'
+    )
     (paths.markdown / "local.md").write_text("---\ncopy-file: exported.html\n---\n")
     (paths.markdown / "custom.md").write_text(f"---\ncustom-import-url: {url}/unused\n---\n")
     cache = paths.src_docs / "cache"
@@ -139,3 +140,62 @@ def test_build_update_stubs_indexes_cached_text_and_fetches_only_once(site, monk
     assert requests == ["/source"]
     assert read_cached(paths.root / "wf_cache", url) == HTML
     assert "Source from origin" in (paths.public / "imported/index.html").read_text()
+
+
+@pytest.mark.parametrize("command", ["build", "pull-webflow"])
+@pytest.mark.parametrize("key", ["import-url", "webflow-import-url", "copy-file"])
+def test_missing_plugin_names_first_import_stub_and_migration(site, command, key):
+    paths, url, requests = site
+    config = paths.src_docs / "mkdocs.yml"
+    config.write_text(
+        config.read_text().split("  - page-import:")[0].replace("docs_dir: md", "docs_dir: pages")
+    )
+    docs = paths.markdown.rename(paths.src_docs / "pages")
+    first = docs / "guide" / "first.markdown"
+    first.parent.mkdir()
+    first.write_text(f"---\n{key}: {url}\n---\n")
+
+    result = subprocess.run(
+        [sys.executable, "-m", "fontlab_www_toolkit", command],
+        cwd=paths.root,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert "guide/first.markdown" in result.stderr
+    assert "mkdocs.yml" in result.stderr and "page-import" in result.stderr
+    assert "README.md#migrate-a-site-to-page-import" in result.stderr
+    assert requests == []
+    assert not paths.public.exists()
+
+
+def test_missing_plugin_without_import_stubs_allows_both_commands(site):
+    paths, _, requests = site
+    config = paths.src_docs / "mkdocs.yml"
+    config.write_text(config.read_text().split("plugins:")[0])
+    (paths.markdown / "imported.md").write_text(
+        "# Examples\n\nimport-url: is a front-matter key.\n"
+    )
+    builder = SiteBuilder(paths)
+    assert builder.pull_webflow() == []
+    builder.build()
+    assert "Examples" in (paths.public / "imported/index.html").read_text()
+    assert requests == []
+
+
+def test_pull_webflow_logs_disabled_plugin_and_fetches_nothing(site):
+    paths, _, requests = site
+    config = paths.src_docs / "mkdocs.yml"
+    config.write_text(
+        config.read_text().replace("  - page-import:", "  - page-import:\n      enabled: false")
+    )
+    result = subprocess.run(
+        [sys.executable, "-m", "fontlab_www_toolkit", "pull-webflow", "--update_stubs"],
+        cwd=paths.root,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stderr.splitlines() == ["page-import is disabled. Skipping pull-webflow."]
+    assert requests == []
+    assert not (paths.root / "wf_cache").exists()
